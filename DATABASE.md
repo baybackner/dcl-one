@@ -3024,3 +3024,67 @@ in its own memory with the same rules, like the places reads fall back to the
 API; that mode serves one process only, so a deployment with several Sites
 replicas sets the database URL. The bootstrap defines the table; an existing
 database gains it from the object pass, so no step exists.
+
+## Shop reconciliation and availability sweeps
+
+The broker purchase, NAME transfer and escrow-action receipt workers read up
+to 100 unsettled rows per chain and pass, the escrow release worker 50 due
+grants, the credit-revocation worker 20 unfinished revocations per chain,
+and the availability watcher 500 distinct pending item keys. A pending
+receipt, malformed grant or unknown mirrored item remains an obligation;
+it must not permanently occupy a bounded query's first page.
+
+`shop.worker_progress` stores each worker's position and a frozen upper key
+for its current sweep, scoped by chain where applicable. The workers use
+indexed bigint ids, credit hashes, or `(contract_address, item_id)` pairs
+without converting indexed columns to another type. Selection and cursor
+advance share a short transaction under the progress row's lock. Chain
+calls, release attempts and item observations run after that transaction
+commits. A crash after selection defers that page until the next sweep;
+it does not delete work, spend an attempt or mark a receipt successful.
+The item watcher also freezes the largest request identity and excludes
+later request ids even if their item keys sort inside the lexical range.
+Revocations freeze a database clock cutoff and exclude rows created after
+it; their sole enqueue path uses the database `created_at` default and does
+not backdate new work. A transaction already open at that cutoff can still
+commit an earlier-dated row, which is revisited on wrap if its key was
+passed. Newly started transactions cannot extend the cohort. New arrivals
+outside these bounds wait for the next sweep, so continuous arrivals
+cannot indefinitely delay retry of a blocked prefix. Rows that
+commit or become due behind the position are also revisited after wrap.
+The existing status, attempt limits, settlement grace and observation
+timestamps keep their meanings. Existing idempotent writes and job leases
+still govern effects; the sweep cursor is not an external-call lease.
+
+The table has no foreign keys to individual obligations: completed or
+deleted source rows may disappear between pages. An empty remainder ends
+the cohort and starts another. Its size is one row per worker and chain,
+not one row per obligation. The schema object pass installs the new table
+from the bootstrap definition. The credit worker uses `credits.revocations_chain_hash_idx`
+on `(chain_id, credit_hash)` for both its upper bound and each hash-ordered
+page. If new arrivals greatly outnumber rows eligible for an ongoing sweep,
+the page query can instead use `credits.revocations_due_idx` to select just
+the rows created on or before the sweep's fixed start time, then sort those
+hashes. Both indexes contain only pending and sent rows. The partial index adds write
+work when revocations enter or leave those states. See [the measured query
+plans](METRICS.md#credit-revocation-sweep).
+
+The object pass creates the index in the migration transaction, which blocks
+writes to `credits.revocations` until commit. On a busy database it can be
+built before migration using the schema definition:
+
+```sql
+CREATE INDEX CONCURRENTLY revocations_chain_hash_idx ON credits.revocations
+    (chain_id, credit_hash) WHERE status IN ('pending', 'sent');
+```
+
+Verify the definition and `pg_index.indisvalid` before running migrate.
+The object pass checks its name. Drop an invalid index before retrying.
+
+Escrow reconciliation applies its missing-grant `NOT EXISTS` predicate
+before `LIMIT 500`. Any grant with that reference satisfies the check. Catalogue
+and rental pages count their filtered set independently of page offset in
+the same SQL statement. The count remains present even
+when the page is empty. Both sides therefore use one snapshot and one
+filter definition. Production query latencies and cardinalities for these
+repairs remain unmeasured.
