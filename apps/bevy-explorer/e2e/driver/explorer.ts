@@ -102,6 +102,7 @@ export interface AudioEntry {
   requested: boolean
   loop: boolean
   spatial: boolean
+  /** `authored`: the component's volume as the engine reads it, 0 to 1; `live`: the gain sent to the backend */
   volume: { authored: number; live: number | null }
   pitch?: number
   currentTime?: number | null
@@ -114,6 +115,7 @@ export interface AudioEntry {
 /** `/audio_state`: the sound of the scene under the player, nearest first. */
 export interface AudioState {
   scene: { hash: string; title: string; parcel: { x: number; y: number } }
+  /** `false` while the player arrives and is not in the scene yet; `note` then says its emitters are muted */
   sceneIsCurrent: boolean
   note: string | null
   listener: { x: number; y: number; z: number }

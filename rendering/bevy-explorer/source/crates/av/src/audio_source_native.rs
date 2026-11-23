@@ -90,7 +90,12 @@ fn manage_audio_sources(
             Some((id, h_instance)) => {
                 if id == emitter.handle.id() {
                     let Some(instance) = instance_assets.get_mut(h_instance.id()) else {
-                        commands.entity(ent).try_insert(RetryEmitter);
+                        // the play is queued and no instance exists yet: the clip is still
+                        // loading, or it failed to load
+                        commands
+                            .entity(ent)
+                            .try_insert(RetryEmitter)
+                            .try_remove::<EmitterPlayback>();
                         instances.insert(ent, (id, h_instance));
                         continue;
                     };
@@ -146,10 +151,11 @@ fn manage_audio_sources(
         let gain = source_volume * emitter_volume;
         let position = match existing {
             None => {
+                // nothing sounds until the instance exists, which the next frames find out
                 commands
                     .entity(ent)
                     .try_insert(Playing)
-                    .try_remove::<EmitterEnded>();
+                    .try_remove::<(EmitterEnded, EmitterPlayback)>();
                 let mut new_instance = audio.play(emitter.handle.clone());
 
                 new_instance
@@ -166,7 +172,7 @@ fn manage_audio_sources(
                 }
 
                 instances.insert(ent, (emitter.handle.id(), new_instance.handle()));
-                emitter.seek_time.map_or(0.0, f64::from)
+                continue;
             }
             Some(instance) => {
                 if emitter.is_changed() {

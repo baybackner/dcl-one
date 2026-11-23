@@ -7,10 +7,8 @@ use ipfs::IpfsAssetServer;
 use scene_runner::{renderer_context::RendererSceneContext, ContainingScene, SceneEntity};
 use serde_json::{json, Value};
 
-#[cfg(any(feature = "ffmpeg", feature = "html"))]
-use crate::AVSinks;
 use crate::{
-    audio_source::{AudioSource, EmitterEnded, EmitterPlayback},
+    audio_source::{clip_seconds, AudioSource, EmitterEnded, EmitterPlayback},
     debug_panel::{source_label, MediaPlayers, MediaRead},
     AVPlayer, AVPlayerConfig, AudioStream, VideoPlayer,
 };
@@ -62,7 +60,8 @@ fn audio_state(
         cmd.reply_failed("there is no player");
         return;
     };
-    let Some(scene) = containing.get_parcel(player) else {
+    // the scene at the player's parcel, also while the player arrives and is kept out of world
+    let Some(scene) = containing.get_parcel_oow(player) else {
         cmd.reply_failed("No scene world found at the current parcel.");
         return;
     };
@@ -70,7 +69,8 @@ fn audio_state(
         cmd.reply_failed("No scene world found at the current parcel.");
         return;
     };
-    // the audio backends mute a scene's emitters unless the player stands in it
+    // the audio backends mute a scene's emitters unless the player stands in it, which an
+    // arriving player does not yet
     let is_current = containing.get(player).contains(&scene);
     let listener = player_gt.translation();
     let distance =
@@ -92,9 +92,8 @@ fn audio_state(
         counts[0] += 1;
         let clip = emitter.map(|emitter| &emitter.handle);
         let load = clip.and_then(|clip| ipfas.asset_server().get_load_state(clip.id()));
-        let duration = clip
-            .and_then(|clip| clips.get(clip.id()))
-            .map(|clip| clip.sound.frames.len() as f64 / f64::from(clip.sound.sample_rate));
+        let source = source.proto();
+        let duration = clip.and_then(|clip| clips.get(clip.id())).map(clip_seconds);
         let requested = source.playing();
         let state = emitter_state(
             !source.audio_clip_url.is_empty() && emitter.is_some(),
@@ -105,7 +104,7 @@ fn audio_state(
         );
         entries.push(json!({
             "kind": "audio_source",
-            "crdtEntityId": entity.id.as_proto_u32().unwrap_or(entity.id.id as u32),
+            "crdtEntityId": crdt_id(entity),
             "source": source_label(&source.audio_clip_url),
             "state": state,
             "playing": playback.is_some(),
@@ -113,7 +112,7 @@ fn audio_state(
             "loop": source.r#loop(),
             "spatial": !source.global(),
             "volume": {
-                "authored": round(source.volume.unwrap_or(1.0)),
+                "authored": round(crate::scene_volume(source.volume)),
                 "live": playback.map(|p| round(p.gain)),
             },
             "pitch": round(source.pitch.unwrap_or(1.0)),
@@ -193,10 +192,9 @@ fn player_entry<T: AVPlayer>(
     position: &impl Fn(Option<&GlobalTransform>) -> Option<Value>,
 ) -> Value {
     let config = read.player.config();
-    #[allow(unused_mut)]
-    let mut entry = json!({
+    let entry = json!({
         "kind": kind,
-        "crdtEntityId": read.entity.id.as_proto_u32().unwrap_or(read.entity.id.id as u32),
+        "crdtEntityId": crdt_id(read.entity),
         "source": source_label(read.player.url()),
         "state": "none",
         "playing": false,
@@ -208,9 +206,11 @@ fn player_entry<T: AVPlayer>(
         "distance": distance(read.transform),
         "position": position(read.transform),
     });
-    #[cfg(any(feature = "ffmpeg", feature = "html"))]
-    add_sink(&mut entry, read.sinks, read.scheduled);
-    entry
+    with_sink(entry, read)
+}
+
+fn crdt_id(entity: &SceneEntity) -> u32 {
+    entity.id.as_proto_u32().unwrap_or(entity.id.id as u32)
 }
 
 /// An emitter's `state`. A clip asked to play that is loaded but not sounding has `ended` only
@@ -236,9 +236,10 @@ fn emitter_state(
 /// A stream's or a video's backend state: the last state the player reported to the scene, the
 /// volume it was sent, and, for a video, where it is in the media.
 #[cfg(any(feature = "ffmpeg", feature = "html"))]
-fn add_sink<T: AVPlayer>(entry: &mut Value, sinks: Option<&AVSinks<T>>, scheduled: bool) {
-    let Some(sinks) = sinks else {
-        return;
+fn with_sink<T: AVPlayer>(mut entry: Value, read: &MediaRead<T>) -> Value {
+    let scheduled = read.scheduled;
+    let Some(sinks) = read.sinks else {
+        return entry;
     };
     let state = sinks.sent_state;
     entry["state"] = json!(state
@@ -252,6 +253,13 @@ fn add_sink<T: AVPlayer>(entry: &mut Value, sinks: Option<&AVSinks<T>>, schedule
             json!((video.current_time >= 0.0).then(|| round(video.current_time as f32)));
         entry["duration"] = json!(video.length.map(|l| round(l as f32)));
     }
+    entry
+}
+
+/// Without a playback backend there is nothing to add.
+#[cfg(not(any(feature = "ffmpeg", feature = "html")))]
+fn with_sink<T: AVPlayer>(entry: Value, _read: &MediaRead<T>) -> Value {
+    entry
 }
 
 #[cfg(test)]
@@ -271,6 +279,26 @@ mod tests {
             "loading"
         );
         assert_eq!(emitter_state(true, false, false, None, false), "loading");
+    }
+
+    #[test]
+    fn a_clip_whose_play_is_queued_is_loading_and_one_that_failed_is_an_error() {
+        // asked to play, the play queued, and the backend has no instance yet (`sounding` false)
+        assert_eq!(
+            emitter_state(true, false, false, Some(&LoadState::Loading), true),
+            "loading"
+        );
+        assert_eq!(emitter_state(true, false, false, None, true), "loading");
+        let failed = LoadState::Failed(std::sync::Arc::new(
+            bevy::asset::AssetLoadError::AssetLoaderPanic {
+                path: "clip.mp3".into(),
+                loader_name: "test",
+            },
+        ));
+        assert_eq!(
+            emitter_state(true, false, false, Some(&failed), true),
+            "error"
+        );
     }
 
     #[test]

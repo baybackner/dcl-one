@@ -19,11 +19,23 @@ use scene_runner::{
     update_world::AddCrdtInterfaceExt, SceneEntity,
 };
 
-#[derive(Component, Debug, Deref)]
+#[derive(Component, Debug)]
 pub struct AudioSource(PbAudioSource);
 
-/// What the backend is doing with a sounding emitter, written each frame it plays and removed
-/// when it stops, so `/audio_state` reads the same state on native and on the web.
+impl AudioSource {
+    /// The component as the scene wrote it.
+    pub(crate) fn proto(&self) -> &PbAudioSource {
+        &self.0
+    }
+}
+
+/// A decoded clip's length in seconds.
+pub(crate) fn clip_seconds(clip: &bevy_kira_audio::AudioSource) -> f64 {
+    clip.sound.frames.len() as f64 / f64::from(clip.sound.sample_rate)
+}
+
+/// What the backend is doing with a sounding emitter: written while the backend has an instance
+/// of its clip, and removed when it stops or while the clip is not started yet, so `/audio_state` reads the same state on native and on the web.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct EmitterPlayback {
     /// Seconds into the clip.

@@ -65,7 +65,7 @@ impl WebAudio {
                         .collect::<Vec<_>>();
                     let sample_rate = asset.sound.sample_rate as f32;
                     self.buffers
-                        .insert(*id, frames.len() as f64 / sample_rate as f64);
+                        .insert(*id, crate::audio_source::clip_seconds(asset));
                     send(AudioCommand::LoadBuffer {
                         id: *id,
                         sample_rate,
