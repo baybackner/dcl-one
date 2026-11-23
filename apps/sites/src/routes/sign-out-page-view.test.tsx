@@ -12,7 +12,7 @@ vi.hoisted(() =>
 );
 
 const magic = vi.hoisted(() => ({ end: vi.fn(async () => {}) }));
-vi.mock("./magic-session", () => ({ endMagicSession: magic.end }));
+vi.mock("@/data/lib/auth/magic-session", () => ({ endMagicSession: magic.end }));
 const page = vi.hoisted(() => vi.fn());
 vi.mock("@/core/lib/telemetry/track", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/core/lib/telemetry/track")>()),
@@ -22,11 +22,11 @@ vi.mock("@/core/lib/telemetry/track", async (importOriginal) => ({
 import { useRoutePageView } from "@/core/lib/telemetry/page-view";
 import { restoreTrackedUser } from "@/core/lib/telemetry/tracked-user";
 import { readVerifiedWallet } from "@/core/lib/telemetry/session";
-import { shouldRevalidate } from "@/routes/root";
+import { shouldRevalidate } from "./root";
 
-import { useAuth } from "./context";
-import { setIdentity } from "./session";
-import { sessionChangeApplied, sessionChangePending, useSessionChangeRevalidation } from "./session-change";
+import { useAuth } from "@/data/lib/auth/context";
+import { setIdentity } from "@/data/lib/auth/session";
+import { sessionChangeApplied, sessionChangePending, useSessionChangeRevalidation } from "@/data/lib/auth/session-change";
 
 // The production order: `disconnect()` is not awaited before the visitor navigates, so a page view can
 // go out while `POST /auth/callback` has not answered yet.
