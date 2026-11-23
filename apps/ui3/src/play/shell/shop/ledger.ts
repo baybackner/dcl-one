@@ -59,6 +59,12 @@ export interface OperationRecord {
    * carrying exactly these counts as this purchase, live or after a reload.
    */
   split?: SplitSale
+  /**
+   * Paid by its Credits alone: its group's useCredits as built, kept before it was signed. Only an execution carrying exactly
+   * these terms counts as this purchase when it advances a checkout to its next part: a successful receipt for the hash the
+   * relay answered isn't enough on its own. Kept with the Credits records: it changes nothing of where a record lives.
+   */
+  sale?: SplitSale
   createdAt: number
   updatedAt: number
 }
@@ -158,6 +164,7 @@ function isRecord(v: unknown, buyer: string): v is OperationRecord {
     (v.displays === undefined || (Array.isArray(v.displays) && v.displays.length <= MAX_DISPLAYS && v.displays.every(isDisplay))) &&
     (v.mana === undefined || isManaAttempt(v.mana)) &&
     (v.split === undefined || isSplitSale(v.split)) &&
+    (v.sale === undefined || isSplitSale(v.sale)) &&
     isTime(v.createdAt) &&
     isTime(v.updatedAt)
   )

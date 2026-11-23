@@ -54,6 +54,22 @@ describe('which transaction is an in-world split purchase', () => {
     expect(await splitExecution(evidenceOf({ to: MANAGER, input }, 'success') as never, dispatched, '0xabc')).toBe('bought')
   })
 
+  it('a group paid by its credits: its credit at its own value under the signed cap, and nothing from the wallet', async () => {
+    // The node's credit carries headroom over the cap it signed; the call pulls no MANA.
+    const V = 1_200_000_000_000_000_000n
+    const held: SpendableCredit = { ...credit, amount: V.toString(), availableAmount: V.toString() }
+    const built = buildStoreUseCreditsArgs(STORE, [item], BUYER, [held], C.toString())
+    expect(built.maxUncreditedValue).toBe(0n)
+    const input = encodeExecuteMetaTransaction('functionData', BUYER, encodeUseCredits(built), ('0x' + '11'.repeat(65)) as Hex)
+    const group: SplitSale = { ...sale, creditWei: C.toString(), creditValueWei: V.toString(), gapWei: '0' }
+    expect(isSplitSale(group)).toBe(true)
+    expect(await splitExecution(evidenceOf({ to: MANAGER, input }, 'success') as never, group, '0xabc')).toBe('bought')
+    // Read with the cap as the credit's value, the same call carries other terms.
+    const { creditValueWei: _, ...capped } = group
+    expect(await splitExecution(evidenceOf({ to: MANAGER, input }, 'success') as never, capped, '0xabc')).toBe('other')
+    expect(isSplitSale({ ...group, creditValueWei: '1.5' })).toBe(false)
+  })
+
   it('with no envelope kept, no revert is its own', async () => {
     expect(await splitExecution(evidenceOf({ to: MANAGER, input: relayed() }, 'reverted') as never, sale, '0xabc')).toBe('unknown')
     expect(await splitExecution(evidenceOf({ to: MANAGER, input: relayed() }, 'success') as never, sale, '0xabc')).toBe('bought')

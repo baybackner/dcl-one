@@ -38,6 +38,11 @@ export interface SplitSale {
   /** The credit's exact value C and the MANA gap G, in wei. */
   creditWei: string
   gapWei: string
+  /**
+   * The credit's own value, in wei, where it isn't the signed cap `creditWei`: a Credits group paid by its credits (one
+   * credit, the node's value with its headroom, under the cap the node signed). A split's credit is exactly its cap.
+   */
+  creditValueWei?: string
   /** The external call as reviewed: its venue (`target`), its function (`selector`) and its data (price, coupon, buyer). */
   target: string
   selector: Hex
@@ -96,6 +101,7 @@ export function isSplitSale(v: unknown): v is SplitSale {
     s.creditId.length > 0 &&
     digits(s.creditWei) &&
     digits(s.gapWei) &&
+    (s.creditValueWei === undefined || digits(s.creditValueWei)) &&
     hex(s.target) &&
     hex(s.selector) &&
     hex(s.callData) &&
@@ -144,7 +150,7 @@ export function readSale(tx: SplitTransaction, sale: SplitSale): 'match' | 'othe
   const same =
     args.credits.length === 1 &&
     credit !== undefined &&
-    credit.value === creditWei &&
+    credit.value === BigInt(sale.creditValueWei ?? sale.creditWei) &&
     args.maxCreditedValue === creditWei &&
     args.maxUncreditedValue === BigInt(sale.gapWei) &&
     args.customExternalCallSignature === '0x' &&

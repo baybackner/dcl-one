@@ -33,7 +33,7 @@ import { isWrongNetworkError } from "../lib/network";
 import { canPayGasItself } from "../lib/wallet-kind";
 import { requireContracts } from "../chain/contracts";
 import { checkoutLineFor, purchaseTargetFor, toUnits, tradeManaPrice, type ResolvedLine } from "./cart";
-import { buyManyWithCredits, groupPurchases, type AnyPurchase } from "./credits";
+import { buyManyWithCredits, CallNotKeptError, groupPurchases, type AnyPurchase, type BuiltUseCredits } from "./credits";
 import { buyManyGasless, isSettlementPending, waitForSettlement } from "./gasless";
 import { acceptPayingMana, manaSpenderFor, mintPayingMana, purchaseFor, splitTerms, type MintToBuy } from "./mana";
 import type { RailContext } from "./rail";
@@ -73,6 +73,13 @@ export type CheckoutDeps = {
   guard?: SpendGuard;
   /** A credits group of one unit paid with Credits and MANA together (see SplitPlan); absent, credits pay it all. */
   split?: SplitPlan;
+  /**
+   * A credits group paid by its credits (no `split`): its credit and its useCredits as built, before anything is signed for
+   * it, so the caller can keep what an execution must carry to count as this group's. False: the caller couldn't keep it,
+   * and then nothing is signed or sent and the credit is released. Called again with the same terms if the wallet sends it
+   * after the relay couldn't.
+   */
+  onCreditsCall?: (call: { creditId: string; expiresAt: number; built: BuiltUseCredits }) => boolean | void;
 };
 
 /** The MANA a unit's sale moves: a mint's price, or a MANA listing's after its coupon; null for a USD-pegged one. */
@@ -208,6 +215,10 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
     dispatchSafe(store, keyId, { type: "observed" });
   };
   const chainId = group.key.chainId;
+  const onBuilt =
+    !split && deps.onCreditsCall
+      ? (built: BuiltUseCredits) => deps.onCreditsCall!({ creditId, expiresAt: Math.floor(Number(credit.expiresAt)), built })
+      : undefined;
   // The fee-free way was tried and couldn't run, so the wallet's own transaction is its fallback.
   let fellBack = false;
   // Why it couldn't run, when the relay said (its daily limits), for the buyer to read beside the fallback's failure.
@@ -218,6 +229,7 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       try {
         await buyManyGasless(ctx, {
           purchases,
+          onBuilt,
           onSigned: handoff,
           ...(split?.onEnvelope
             ? {
@@ -247,13 +259,19 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       }
     }
     if (!settled) {
-      await buyManyWithCredits(ctx, { purchases, onHandoff: handoff, onBroadcast: ({ txHash: h }) => broadcast(h) });
+      await buyManyWithCredits(ctx, { purchases, onBuilt, onHandoff: handoff, onBroadcast: ({ txHash: h }) => broadcast(h) });
     }
     guard.submitFinished(creditId);
     dispatchSafe(store, keyId, { type: "confirmed", ...(txHash ? { txHash } : {}) });
     return { status: "confirmed", txHash };
   } catch (e) {
     guard.submitFinished(creditId);
+    // The caller couldn't keep the call before it was signed: nothing went, and the credit goes back.
+    if (e instanceof CallNotKeptError && !handedOff && txHash === null) {
+      const failure: GroupFailure = { kind: "refused", message: e.message };
+      dispatchSafe(store, keyId, { type: "failed", failure });
+      return { status: "failed", failure, released: await release(deps, [creditId]) };
+    }
     // A split's revert is its caller's to attribute first: a reverted receipt for the hash the relay answered may be some
     // other transaction's, while this purchase's own can still land. Nothing is released here.
     if (split && isRevertedTxError(e) && txHash) return { status: "pending", txHash };

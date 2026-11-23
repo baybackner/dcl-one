@@ -17,6 +17,8 @@ import { claimLock, createShellShop, creditRecordOutcome, type ShellPurchaseHand
 import { NAME_SIMULATION_MS } from '../shell/shop/namePurchase'
 import { createLedger, type OperationRecord } from '../shell/shop/ledger'
 import type { PurchaseIntent } from '../shell/shop/walletGuard'
+import { encodeUseCredits, idToSalt, type UseCreditsArgs } from '../../shop/checkout/purchase/encoding'
+import type { BuiltUseCredits } from '../../shop/checkout/purchase/credits'
 
 const BUYER = BOOK.buyer.toLowerCase()
 const OTHER = '0x' + '9'.repeat(40)
@@ -116,6 +118,8 @@ function setup(
     tick?: number
     /** The chain's receipts by hash (a missing hash has none yet). */
     receipts?: Record<string, 'success' | 'reverted'>
+    /** What the chain says a hash's transaction is (./manaEvidence), for purchases checked against their own call. */
+    evidence?: ShellShopServices['manaEvidence']
     /** The creator's profile name; Aurora by default. */
     creatorName?: ShellShopServices['creatorName']
     /** This tab's Web Locks (`locks().tab`); every lock is free by default. */
@@ -178,6 +182,7 @@ function setup(
       }) as never,
     primeFlags: async () => {},
     run: run as unknown as ShellShopServices['run'],
+    ...(opts.evidence ? { manaEvidence: opts.evidence } : {}),
     watch,
     manager: () => (opts.manager === undefined ? TRUSTED : opts.manager),
     guard,
@@ -1315,6 +1320,109 @@ describe('a purchase of several items (the cart)', () => {
     handlers.onClose()
     expect(t.events.filter((e) => e.state === 'succeeded').map((e) => e.items.map((i) => i.itemId))).toEqual([['7']])
     expect(t.events.filter((e) => e.state === 'failed').map((e) => e.items.map((i) => i.itemId))).toEqual([['8', '9']])
+  })
+
+  describe('a group paid by its credits, before the next one starts', () => {
+    const DEADLINE = 2_000_000_000
+    const hashOf = (call: string): string => '0x' + (call === 'accept' ? 'a1' : 'b2').repeat(32)
+    /** A group's useCredits arguments as the rails build them for `call`: one credit (`credit`), its call to the venue. */
+    const argsFor = (call: string, credit = `credit-${call}`): UseCreditsArgs => ({
+      credits: [{ value: 1_000n, expiresAt: BigInt(DEADLINE), salt: idToSalt(credit) }],
+      creditsSignatures: ['0x'],
+      externalCall: { target: `0x${(call === 'accept' ? 'a7' : 'b8').repeat(20)}`, selector: '0x12345678', data: `0x${call === 'accept' ? '01' : '02'}`, expiresAt: BigInt(DEADLINE), salt: `0x${'00'.repeat(32)}` },
+      customExternalCallSignature: '0x',
+      maxUncreditedValue: 0n,
+      maxCreditedValue: 900n
+    })
+    /** The group's call as the executor hands it to the shell before signing. */
+    const builtFor = (call: string, credit = `credit-${call}`): { creditId: string; expiresAt: number; built: BuiltUseCredits } => {
+      const args = argsFor(call, credit)
+      return { creditId: credit, expiresAt: DEADLINE, built: { args, salts: [credit], chainId: 137, manager: TRUSTED, data: encodeUseCredits(args) } as unknown as BuiltUseCredits }
+    }
+    /** The buyer's own useCredits, sent from its wallet, carrying `args`; a successful receipt for every hash. */
+    const chainSays = (txs: Record<string, UseCreditsArgs>): ShellShopServices['manaEvidence'] =>
+      () =>
+        ({
+          transaction: async (_chain: number, hash: string) => (txs[hash] ? { to: TRUSTED.address, input: encodeUseCredits(txs[hash]!), from: BOOK.buyer } : null),
+          receipt: async (_chain: number, hash: string) => (txs[hash] ? { transactionHash: hash, status: 'success', blockNumber: 1n } : null)
+        }) as never
+    /**
+     * Runs each group as the executor does: its call kept before it is signed, then the relay's hash, confirmed. `at.saved`
+     * gets what the ledger held for the group right after it was kept, when `at.storage` is set.
+     */
+    const runKept = (at: { storage?: Storage | null; saved?: unknown[] } = {}): RunFn => async (deps, group) => {
+      const call = group.key.call.kind
+      const answer = deps.onCreditsCall?.(builtFor(call))
+      if (at.storage) (at.saved ??= []).push(createLedger(() => at.storage!).load(BUYER).find((r) => r.sale?.creditId === `credit-${call}`)?.sale ?? null)
+      if (answer === false) throw new Error('not kept')
+      return { status: 'confirmed', txHash: hashOf(call) }
+    }
+
+    it('runs the next group once the one before it is seen bought by its own call', async () => {
+      const storage = memoryStorage()
+      const at: { storage: Storage; saved?: unknown[] } = { storage }
+      const t = setup({ storage, items: ITEMS, offers: mixed, resolvers: trades, run: runKept(at), evidence: chainSays({ [hashOf('accept')]: argsFor('accept'), [hashOf('storeBuy')]: argsFor('storeBuy') }) })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      const done = await t.until('success')
+      expect(done.view.step === 'success' && done.view.items).toHaveLength(2)
+      expect(t.run).toHaveBeenCalledTimes(2)
+      // Each group's call was in its record as soon as it was kept, before anything was signed for it.
+      expect(at.saved).toMatchObject([
+        { creditId: 'credit-accept', creditWei: '900', creditValueWei: '1000', gapWei: '0', manager: TRUSTED.address, selector: '0x12345678', callData: '0x01' },
+        { creditId: 'credit-storeBuy', creditWei: '900', creditValueWei: '1000', gapWei: '0', manager: TRUSTED.address, selector: '0x12345678', callData: '0x02' }
+      ])
+    })
+
+    it('holds the rest when the hash the relay answered is a successful purchase of another credit', async () => {
+      // The relay's hash is the buyer's useCredits of another credit, mined and successful: not this group's own call.
+      const t = setup({ items: ITEMS, offers: mixed, resolvers: trades, run: runKept(), evidence: chainSays({ [hashOf('accept')]: argsFor('accept', 'credit-other') }) })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await vi.waitFor(() => expect(t.shown.some((s) => s.view.step === 'pending' || s.view.step === 'failed')).toBe(true))
+      expect(t.run).toHaveBeenCalledTimes(1)
+      expect(t.events.some((e) => e.state === 'succeeded')).toBe(false)
+      expect(t.guard.mock.calls.map(([, intent]) => intent.sale.call)).toEqual(['accept'])
+    })
+
+    it('holds the rest when the hash the relay answered spends its credit on another call', async () => {
+      const other = argsFor('accept')
+      const t = setup({
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        run: runKept(),
+        evidence: chainSays({ [hashOf('accept')]: { ...other, externalCall: { ...other.externalCall, data: '0xff' } } })
+      })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await vi.waitFor(() => expect(t.shown.some((s) => s.view.step === 'pending' || s.view.step === 'failed')).toBe(true))
+      expect(t.run).toHaveBeenCalledTimes(1)
+      expect(t.events.some((e) => e.state === 'succeeded')).toBe(false)
+    })
+
+    it('keeps the group’s call with the Credits records, where an older build still reads the purchase', () => {
+      const storage = memoryStorage()
+      const ledger = createLedger(() => storage)
+      const args = argsFor('storeBuy')
+      const sale = { buyer: BUYER, chainId: 137, manager: TRUSTED.address, creditId: 'credit-storeBuy', creditWei: '900', creditValueWei: '1000', gapWei: '0', target: args.externalCall.target, selector: args.externalCall.selector, callData: args.externalCall.data }
+      const base = { id: 'abcdef01-0002', buyer: BUYER, items: [{ contract: BOOK.collection, itemId: '8', quantity: 1 }], state: 'pending' as const, createdAt: 1, updatedAt: 2 }
+      expect(ledger.save({ ...base, sale })).toBe(true)
+      const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i) ?? '')
+      expect(keys.filter((k) => k.endsWith(base.id))).toEqual([`dcl-inworld-shop:record:v1:${BUYER}:${base.id}`])
+      expect(ledger.load(BUYER).find((r) => r.id === base.id)?.sale).toEqual(sale)
+      // A call that isn’t one is never read back as the purchase's.
+      expect(ledger.save({ ...base, id: 'abcdef01-0003', sale: { ...sale, creditValueWei: 'lots' } })).toBe(true)
+      expect(ledger.load(BUYER).some((r) => r.id === 'abcdef01-0003')).toBe(false)
+    })
+
+    it('holds the rest when the chain has nothing yet for the hash the relay answered', async () => {
+      const t = setup({ items: ITEMS, offers: mixed, resolvers: trades, run: runKept(), evidence: chainSays({}) })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await vi.waitFor(() => expect(t.shown.some((s) => s.view.step === 'pending' || s.view.step === 'failed')).toBe(true))
+      expect(t.run).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('offers TRY AGAIN for the whole cart when its first group handed nothing off', async () => {

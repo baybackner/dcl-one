@@ -24,6 +24,7 @@ import { shopChainReader, type ChainReader } from '../../../shop/checkout/chain/
 import { liveResolvers, reviewCart, type SettlementResolvers } from '../../../shop/checkout/purchase/cart'
 import type { Hex } from 'viem'
 import { releaseAuthorizing, runGroup, splitPriceOf, watchGroup, type CheckoutDeps, type GroupResult, type SplitPlan } from '../../../shop/checkout/purchase/executor'
+import type { BuiltUseCredits } from '../../../shop/checkout/purchase/credits'
 import { buildAcceptCalldata, buildAcceptWithCouponCalldata, buildStoreBuyCalldata } from '../../../shop/checkout/purchase/encoding'
 import { purchaseTargetFor } from '../../../shop/checkout/purchase/cart'
 import { claimSplitHold, clearSettledSplitHold, clearSplitHold, creditExpiredOnChain, findCreditRecord, findCreditRecords, readAccountSplitHolds, readSplitHoldRecord, splitCreditOverOnChain, splitHoldLine, splitInFlightMessage, splitsInFlight, splitToName, writeSplitHold, type SplitHold, type SplitHoldClearing } from '../../../shop/checkout/purchase/splitHold'
@@ -2187,6 +2188,30 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
           ctx: { buyer: quote.buyer, provider: svc.guard(prompting(op, wallet, quote.kind), intent), reader: svc.reader(), client: quote.client, walletKind: quote.kind, ...rail, fetchImpl: relay },
           store,
           guard: createSpendGuard(),
+          // A group paid by its credits: what its execution must carry to count as this part, kept before it is signed.
+          ...(split
+            ? {}
+            : {
+                onCreditsCall: ({ creditId, expiresAt, built }: { creditId: string; expiresAt: number; built: BuiltUseCredits }) => {
+                  const { args } = built
+                  const [credit] = args.credits
+                  if (args.credits.length !== 1 || !credit) return false
+                  op.sale = {
+                    buyer: quote.buyer,
+                    chainId,
+                    manager: manager.address,
+                    creditId,
+                    creditWei: args.maxCreditedValue.toString(),
+                    creditValueWei: credit.value.toString(),
+                    gapWei: args.maxUncreditedValue.toString(),
+                    target: args.externalCall.target,
+                    selector: args.externalCall.selector,
+                    callData: args.externalCall.data,
+                    creditExpiresAt: expiresAt
+                  }
+                  return keep(op)
+                }
+              }),
           ...(split
             ? {
                 split: {
@@ -2237,9 +2262,11 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
     }
     switch (result.status) {
       case 'confirmed': {
-        // A split is bought only by its own execution: a successful receipt for the hash the relay answered isn't enough.
-        if (op.split) {
-          const outcome = result.txHash ? await splitExecution(svc.manaEvidence(), op.split, result.txHash) : 'unknown'
+        // A purchase is bought only by its own execution: a successful receipt for the hash the relay answered isn't
+        // enough. A split's terms, or its group's call as built when its credits pay it all.
+        const own = op.split ?? op.sale
+        if (own) {
+          const outcome = result.txHash ? await splitExecution(svc.manaEvidence(), own, result.txHash) : 'unknown'
           if (outcome !== 'bought') {
             // Another transaction's hash is never kept, nor read again, as this sale's.
             const notIt = outcome === 'other' || outcome === 'foreign'
