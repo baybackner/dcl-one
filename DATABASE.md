@@ -2651,18 +2651,28 @@ Invariants:
   local row of a world displaces its mirrored row, and the world stands), or
   those on the effective base parcel of a Genesis place (the resolver's
   `ParcelSet::effective_base` of the positions and the declared base in the
-  removal row) when no enabled `explore.place` row (`world`, `disabled`) has
-  that effective base: the rows that hold the parcel (`raw->'positions'` on
-  `place_positions_path_gin`), each compared by `social.scene_base_parcel` of
-  its positions and `base_position`, and the rows with no list of positions
-  or an empty one, which stand on their `base_position` as the removal feed
-  reads them. No index serves `base_position`: that half is one scan of
-  `explore.place` for each statement (26,198 rows in 20 ms on a synced
-  node, 2026-11-23; no enabled Genesis row there lacks the list). Both
-  statements build the probe from one fragment (`no_place_on`). A list that
-  holds the parcel in another spelling (`"1, 2"`) is not found: the mirror
-  stores such upstream documents (21 of 24,449 enabled Genesis rows on that
-  node). The notices of a Genesis place read the admins on the same key
+  removal row) when no enabled `explore.place` row (`world`, `disabled`)
+  stands on that parcel. A place stands on the key that its own removal
+  reads: `social.scene_base_parcel` of its positions and `base_position`, or
+  its `base_position` when the list has no parcel or there is no list. The
+  probe has two halves, and both statements build it from one fragment
+  (`no_place_on`). The first half reads the rows whose list holds the parcel
+  as it is written (`raw->'positions'` on `place_positions_path_gin`): that
+  is every candidate among the lists of canonical parcels, in less than
+  1 ms, and the second half does not run when it finds a place. The second
+  half reads each other row: a list that holds a parcel in another spelling
+  (`"1, 2"`, a trailing space, a pair in two strings: the mirror stores such
+  upstream documents), an empty list, no list. It finds those rows by the
+  text of the list (`CANONICAL_POSITIONS`), which no index serves: one scan
+  of `explore.place` that reads `raw` of each row and calls the function for
+  the rows found (26,201 rows, 21 found of 24,449 enabled Genesis rows, 75
+  to 100 ms on a synced node, 143 ms on a cold cache, 2026-11-23; the
+  function on every row costs 700 ms). The grants statement runs the probe
+  once for each Genesis removal, the bans statement only when a ban is on
+  the parcel. The feed gives at most 100 removals a pass and removals are
+  rare, so the scan has no index: an index on normalised positions would be
+  written at each mirror pass for this one read. The notices of a Genesis
+  place read the admins on the same key
   (`streaming::notifications::genesis_key`). A retired
   world-scene identity is not bound to a deployment again, so no request
   reads its grants.

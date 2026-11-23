@@ -142,21 +142,31 @@ async fn cleanup(
 }
 
 /// The SQL that is true when no enabled Genesis place stands on the base
-/// parcel in the parameter `base`. A place stands on the effective base of
-/// its positions (`place_positions_path_gin` finds the rows that hold the
-/// parcel). A place with no list of positions, or an empty one, stands on its
-/// `base_position`, as the removal feed reads it: no index serves that
-/// column, so this half is one scan of `explore.place` for each statement.
+/// parcel in the parameter `base`. A place stands on the key that its own
+/// removal reads ([`genesis_key`]): the effective base of its positions, or
+/// its `base_position` when the list has no parcel or there is no list.
+/// `place_positions_path_gin` finds the rows that hold the parcel as it is
+/// written, which is every candidate among the lists of canonical parcels.
+/// The second half reads each other row ([`CANONICAL_POSITIONS`] is not
+/// true: a parcel in another spelling, an empty list, no list). No index
+/// finds those rows, so that half is one scan of `explore.place`.
 fn no_place_on(base: &str) -> String {
     format!(
         "NOT EXISTS (SELECT 1 FROM explore.place p WHERE p.disabled IS FALSE AND p.world IS FALSE \
          AND p.raw->'positions' @> jsonb_build_array({base}) \
          AND social.scene_base_parcel(ARRAY(SELECT jsonb_array_elements_text(p.raw->'positions')), p.base_position) = {base}) \
          AND NOT EXISTS (SELECT 1 FROM explore.place p WHERE p.disabled IS FALSE AND p.world IS FALSE \
-         AND p.base_position = {base} \
-         AND (jsonb_typeof(p.raw->'positions') IS DISTINCT FROM 'array' OR p.raw->'positions' = '[]'))"
+         AND (p.raw->'positions')::text ~ '{CANONICAL_POSITIONS}' IS NOT TRUE \
+         AND COALESCE(social.scene_base_parcel(CASE WHEN jsonb_typeof(p.raw->'positions') = 'array' \
+         THEN ARRAY(SELECT jsonb_array_elements_text(p.raw->'positions')) ELSE ARRAY[p.base_position] END, \
+         p.base_position), p.base_position) = {base})"
     )
 }
+
+/// The text of a list of positions that holds only canonical parcels, at
+/// least one: each is `x,y` with no space, sign of zero or leading zero, of
+/// nine digits at most, so it parses and is its own canonical form.
+const CANONICAL_POSITIONS: &str = r#"^\[("(0|-?[1-9][0-9]{0,8}),(0|-?[1-9][0-9]{0,8})"(, )?)+\]$"#;
 
 const METADATA_BATCH: usize = 100;
 fn metadata_batch(mut rooms: Vec<String>, after: Option<&str>) -> (Vec<String>, Option<String>) {
@@ -1674,6 +1684,91 @@ mod tests {
             assert_eq!(kept, (true, 1), "{}", unlisted.1);
             let delete = sqlx::query("DELETE FROM explore.place WHERE id = $1").bind(&unlisted.0);
             delete.execute(&pool).await.unwrap();
+        }
+    }
+
+    /// An enabled place stands on the effective base of its positions in any
+    /// spelling, as its own removal reads them: the grants and the bans on
+    /// that parcel stay until that place is removed too, and each removal
+    /// tells the admins of the parcel.
+    #[tokio::test]
+    async fn a_place_with_positions_in_another_spelling_keeps_the_admins_and_bans_on_its_base() {
+        let Some(pool) = crate::db::scratch::pool(4).await else {
+            return;
+        };
+        let (mut state, directory, _) = setup(pool.clone()).await;
+        let wallet = |tag: &str| Address::parse(&format!("0x{}", tag.repeat(40))).unwrap();
+        let (owner, admin) = (wallet("a"), wallet("b"));
+        let land = crate::access::LandOperators {
+            owner: owner.as_str().to_owned(),
+            ..Default::default()
+        };
+        state.policy = Arc::new(StubPolicy {
+            land: Ok(Some(Arc::new(Some(land)))),
+            ..Default::default()
+        });
+        let state = Arc::new(state);
+        let token = uuid::Uuid::new_v4().as_u128();
+        let (x, y) = ((token % 1_000_000) as i64 + 4000, (token >> 64) % 1_000_000);
+        let place = "INSERT INTO explore.place (id, base_position, raw) VALUES ($1, $2, $3)";
+        let removal = "SELECT event_id, place_id, owner_address, world, world_name, base_position, positions, removed_at, cleaned_at FROM explore.place_removal_pending WHERE place_id = $1";
+        // Each sibling: the base it declares and its positions, as the
+        // mirrored documents write them (a space, a trailing space, a pair
+        // in two strings, which has no parcel).
+        let siblings = [
+            (format!("{x}, {y}"), json!([format!("{x}, {y}")])),
+            (
+                format!("{x},{}", y + 1),
+                json!([format!("{x},{}  ", y + 1)]),
+            ),
+            (
+                format!("{x},{}", y + 2),
+                json!([x.to_string(), (y + 2).to_string()]),
+            ),
+        ];
+        for (i, (declared, positions)) in siblings.into_iter().enumerate() {
+            let parcel = format!("{x},{}", y + i as u128);
+            (state.moderation.add_admin(&parcel, &admin, &owner).await).unwrap();
+            sqlx::query("INSERT INTO social.scene_bans (place_id, banned_address, banned_by) VALUES ($1, $2, $2)")
+                .bind(&parcel).bind(admin.as_str()).execute(&pool).await.unwrap();
+            let listed = (
+                uuid::Uuid::new_v4().to_string(),
+                parcel.clone(),
+                json!([parcel]),
+            );
+            let sibling = (uuid::Uuid::new_v4().to_string(), declared, positions);
+            for (id, base, positions) in [&listed, &sibling] {
+                let insert = sqlx::query(place).bind(id).bind(base);
+                let insert = insert.bind(json!({ "positions": positions }));
+                insert.execute(&pool).await.unwrap();
+            }
+            // The sibling stands while the other place is removed, then goes.
+            for ((id, _, positions), kept) in [(&listed, (true, 1)), (&sibling, (false, 0))] {
+                let delete = sqlx::query("DELETE FROM explore.place WHERE id = $1").bind(id);
+                delete.execute(&pool).await.unwrap();
+                let event: RemovedPlace = sqlx::query_as(removal)
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                cleanup(&state, &RemovedPlaces::new(pool.clone()), &event)
+                    .await
+                    .unwrap();
+                let left: (bool, i64) = sqlx::query_as(
+                    "SELECT (SELECT active FROM social.scene_admins WHERE place_id = $1), \
+                     (SELECT count(*) FROM social.scene_bans WHERE place_id = $1)",
+                )
+                .bind(&parcel)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(left, kept, "{positions} removed");
+                let told =
+                    std::mem::take(&mut *directory.stub.streaming_notifications.lock().unwrap());
+                let told: std::collections::BTreeSet<&str> =
+                    told.iter().map(|n| n.recipient.as_str()).collect();
+                assert_eq!(told, [owner.as_str(), admin.as_str()].into(), "{positions}");
+            }
         }
     }
 
