@@ -21,7 +21,7 @@ import {
   type TitleBarSection
 } from '@dcl/one-ui'
 import type { GalleryEntry } from '../registry'
-import { covers, face, people } from './data'
+import { covers, people, placeholderFace } from './data'
 import layout from './layout.module.css'
 
 const publicSections = decentralandPublicNavSections('explore', '/explore', {
@@ -257,8 +257,8 @@ export const navigationEntries: GalleryEntry[] = [
         title: 'Face picture, fallback and name colour',
         render: () => (
           <div className={layout.row}>
-            <NavProfileButton imageUrl={people.ada.picture} fallbackSrc={face('?', 0)} />
-            <NavProfileButton fallbackSrc={face('?', 0)} color={people.grace.color} />
+            <NavProfileButton imageUrl={people.ada.picture} fallbackSrc={placeholderFace} />
+            <NavProfileButton fallbackSrc={placeholderFace} color={people.grace.color} />
           </div>
         )
       }
@@ -288,9 +288,9 @@ export const navigationEntries: GalleryEntry[] = [
         id: 'devices',
         title: 'Fixed device sizes',
         render: () => (
-          <div className={layout.stack}>
+          <div className={layout.rows}>
             {(['mobile', 'desktop'] as const).map((device) => (
-              <TabsBar key={device} label={`${device} tabs`}>
+              <TabsBar key={device} label={`${device} tabs`} scrollable>
                 <Tabs label={`${device} selected`} device={device} selected />
                 <Tabs label={`${device} link`} device={device} href="#tab" />
               </TabsBar>

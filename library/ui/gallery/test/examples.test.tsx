@@ -9,8 +9,10 @@ import {
 } from 'react'
 import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { imageSource } from '../../link.helpers'
 import { claimProblems, componentExports } from '../src/coverage'
 import { entries } from '../src/examples'
+import { covers, people, picture, placeholderFace } from '../src/examples/data'
 import { foundationPages } from '../src/foundations/FoundationPages'
 import type { GalleryEntry } from '../src/registry'
 import { instrumentComponents } from './instrument'
@@ -137,5 +139,36 @@ describe('when a public export is a memo or forwardRef component', () => {
     expect(ref.current?.textContent).toBe('forward')
     expect(exports.helper).toBe(helper)
     expect(exports.Value).toBe(value)
+  })
+})
+
+describe('when the examples pass pictures', () => {
+  const pictures = [
+    ...Object.entries(covers),
+    ...Object.entries(people).map(([name, person]) => [name, person.picture] as const),
+    ['placeholderFace', placeholderFace] as const
+  ]
+
+  // CardImage and ShopCard drop a picture whose URL their image policy refuses, as they do a `data:` URL, and show
+  // their empty state instead: a page would then show no picture where the apps show one.
+  it.each(pictures)('should give %s as a URL the components load', (_, url) => {
+    expect(url).toMatch(/^\/[^/]/)
+    expect(imageSource(url)).toBe(url)
+  })
+
+  it('should keep a picture root-relative under the prefix the page is served from', () => {
+    document.head.insertAdjacentHTML('afterbegin', '<base href="https://example.test/ui-gallery/">')
+    try {
+      expect(picture('./assets/plaza.webp')).toBe('/ui-gallery/assets/plaza.webp')
+      expect(picture('https://example.test/ui-gallery/assets/plaza.webp')).toBe(
+        '/ui-gallery/assets/plaza.webp'
+      )
+    } finally {
+      document.head.querySelector('base')?.remove()
+    }
+  })
+
+  it('should refuse a data URL, which the components drop', () => {
+    expect(imageSource('data:image/svg+xml,%3Csvg%3E%3C/svg%3E')).toBeUndefined()
   })
 })

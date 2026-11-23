@@ -20,6 +20,20 @@
   gap: var(--dcl-space-24);
 }
 
+/* A stack whose items keep their own width up to the stage's, padding included: a bar too wide for the stage
+   scrolls inside it instead of widening the page. */
+.rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: var(--dcl-space-16);
+}
+
+.rows > * {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
 .narrow {
   width: 100%;
   max-width: 360px;

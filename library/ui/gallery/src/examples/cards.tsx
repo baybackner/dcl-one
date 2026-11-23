@@ -52,7 +52,7 @@ function SelectableShopCard() {
   const [selected, setSelected] = useState(false)
   return (
     <ShopCard
-      name="Selectable hoodie"
+      name="Selectable gloves"
       image={covers.wearable}
       rarity="rare"
       selected={selected}
@@ -308,7 +308,7 @@ export const cardEntries: GalleryEntry[] = [
             {rarities.map((rarity) => (
               <ShopCard
                 key={rarity}
-                name={`${rarity} hoodie`}
+                name={`${rarity} gloves`}
                 image={covers.wearable}
                 rarity={rarity}
                 categoryIcon={<BackpackUpperBody size={16} aria-hidden="true" />}
@@ -357,7 +357,7 @@ export const cardEntries: GalleryEntry[] = [
           <div className={layout.cards}>
             <ShopCard
               variant="catalogue"
-              name="Catalogue hoodie"
+              name="Catalogue gloves"
               image={covers.wearable}
               rarity="uncommon"
               creator={people.grace}

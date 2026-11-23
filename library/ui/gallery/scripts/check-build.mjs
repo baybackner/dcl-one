@@ -3,7 +3,9 @@
 // Review. It serves <dist> (the combined output: the generated Review at its root, the gallery in gallery/) from a
 // local server under a URL prefix (default "/"), drives Chromium and fails unless:
 //   1. the gallery entry (<prefix>gallery/) lists runtime and generated pages, labelled by source;
-//   2. every runtime page draws every example in its iframe canvas with a nonzero box and no example error;
+//   2. every runtime page draws every example in its iframe canvas with a nonzero box and no example error, and at
+//      1280px and 375px keeps its layout (LAYOUT): the page fits the viewport, every picture loads and paints inside
+//      its own box, and no in-flow text covers other text; so do the foundations pages and the HUD Showcase;
 //   3. the canvas is a real viewport: NavBar shows its menu button at 375px and hides it at 1280px;
 //   4. every runtime foundations page renders;
 //   5. the HUD section lists the Explorer HUD's Showcase first, then its pages; the Showcase page draws every page
@@ -142,6 +144,88 @@ const EXAMPLES = `(() => {
   }))
 })()`
 
+// What breaks an example's layout in a canvas document, as a list of problems (empty when none), or null while a
+// picture is still loading. An example must fit the viewport (no page wider than it), every picture must load and
+// paint inside the box that holds it (a cover larger than its slot spills over the text beside it), and no line of
+// in-flow text may cover another one. Text a component hides for assistive technology, clips by design (ellipsis,
+// line clamp, scroller) or lays over the card on purpose (a badge, a toast, an overlay: positioned boxes) is not
+// in-flow text.
+const LAYOUT = `(() => {
+  const doc = ${CANVAS}
+  const view = doc?.defaultView
+  if (!doc || doc.readyState !== 'complete') return null
+  if ([...doc.images].some((image) => image.loading !== 'lazy' && !image.complete)) return null
+  const problems = []
+  const where = (node) => (node.closest('[data-example]')?.dataset.example ?? '-')
+  const name = (node) => node.tagName.toLowerCase() + (typeof node.className === 'string' && node.className ? '.' + node.className.split(' ')[0] : '')
+  if (doc.documentElement.scrollWidth > view.innerWidth + 1)
+    problems.push('the page is ' + doc.documentElement.scrollWidth + 'px wide in a ' + view.innerWidth + 'px viewport')
+  for (const image of doc.images)
+    if (image.complete && image.naturalWidth === 0) problems.push(where(image) + ': the picture ' + image.src.slice(0, 80) + ' does not load')
+  const shown = (node) => {
+    for (let at = node; at && at !== doc.body; at = at.parentElement) {
+      const style = view.getComputedStyle(at)
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
+      if (style.clipPath.includes('inset(50%)') || (style.clip && style.clip !== 'auto')) return false
+    }
+    return true
+  }
+  // The part of a box its clipping ancestors let paint.
+  const painted = (node, box) => {
+    let out = { left: box.left, right: box.right, top: box.top, bottom: box.bottom }
+    for (let at = node.parentElement; at && at !== doc.body; at = at.parentElement) {
+      const style = view.getComputedStyle(at)
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue
+      const clip = at.getBoundingClientRect()
+      out = { left: Math.max(out.left, clip.left), right: Math.min(out.right, clip.right), top: Math.max(out.top, clip.top), bottom: Math.min(out.bottom, clip.bottom) }
+    }
+    return { ...out, width: Math.max(0, out.right - out.left), height: Math.max(0, out.bottom - out.top) }
+  }
+  const overlay = (node, stage) => {
+    for (let at = node; at && at !== stage; at = at.parentElement)
+      if (['absolute', 'fixed', 'sticky'].includes(view.getComputedStyle(at).position)) return true
+    return false
+  }
+  for (const stage of doc.querySelectorAll('[data-stage]')) {
+    for (const media of stage.querySelectorAll('img, video')) {
+      const holder = media.parentElement
+      if (!shown(media) || holder === stage) continue
+      const box = painted(media, media.getBoundingClientRect())
+      const slot = holder.getBoundingClientRect()
+      if (box.width > 1 && box.height > 1 && (box.left < slot.left - 1 || box.right > slot.right + 1 || box.top < slot.top - 1 || box.bottom > slot.bottom + 1))
+        problems.push(where(media) + ': a picture paints ' + Math.round(box.width) + 'x' + Math.round(box.height) + ' outside its ' + Math.round(slot.width) + 'x' + Math.round(slot.height) + ' ' + name(holder))
+    }
+    const lines = []
+    const walker = doc.createTreeWalker(stage, NodeFilter.SHOW_TEXT)
+    for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+      const owner = text.parentElement
+      if (!text.textContent.trim() || !shown(owner) || overlay(owner, stage)) continue
+      const range = doc.createRange()
+      range.selectNodeContents(text)
+      for (const line of range.getClientRects()) {
+        const box = painted(text, line)
+        if (box.width > 1 && box.height > 1) lines.push({ owner, box, text: text.textContent.trim().slice(0, 30) })
+      }
+    }
+    for (let i = 0; i < lines.length; i += 1)
+      for (let j = i + 1; j < lines.length; j += 1) {
+        const a = lines[i], b = lines[j]
+        if (a.owner === b.owner || a.owner.contains(b.owner) || b.owner.contains(a.owner)) continue
+        const shared = Math.max(0, Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left)) *
+          Math.max(0, Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top))
+        if (shared > 0.2 * Math.min(a.box.width * a.box.height, b.box.width * b.box.height))
+          problems.push(where(a.owner) + ': "' + a.text + '" overlaps "' + b.text + '"')
+      }
+  }
+  return [...new Set(problems)]
+})()`
+
+/** Waits for the canvas's pictures, then throws naming every layout problem LAYOUT finds on a page. */
+async function checkLayout(session, page) {
+  const problems = await waitFor(session, LAYOUT, `the pictures of ${page}`)
+  if (problems.length) throw new Error(`${page} breaks its layout: ${problems.join('; ')}`)
+}
+
 /** Runs the checks. Resolves with a summary; rejects naming the first failed check. */
 async function checkGallery({ dist, prefix = '/', hosted = false, browser } = {}) {
   const base = normalizePrefix(prefix)
@@ -186,17 +270,20 @@ async function checkGallery({ dist, prefix = '/', hosted = false, browser } = {}
 
     const examples = []
     for (const name of listed.runtime) {
-      await open(`?component=${encodeURIComponent(name)}&width=1280`)
-      const drawn = await waitFor(
-        session,
-        `${CANVAS}?.querySelector('main')?.dataset.component === ${JSON.stringify(name)} && ${EXAMPLES}`,
-        `the ${name} canvas`
-      )
-      for (const example of drawn) {
-        if (example.error) throw new Error(`${name} ${example.id} failed: ${example.error}`)
-        if (!example.drawn) throw new Error(`${name} ${example.id} draws nothing`)
+      for (const width of [1280, 375]) {
+        await open(`?component=${encodeURIComponent(name)}&width=${width}`)
+        const drawn = await waitFor(
+          session,
+          `${CANVAS}?.querySelector('main')?.dataset.component === ${JSON.stringify(name)} && document.querySelector('iframe').clientWidth === ${width} && ${EXAMPLES}`,
+          `the ${name} canvas at ${width}px`
+        )
+        for (const example of drawn) {
+          if (example.error) throw new Error(`${name} ${example.id} failed: ${example.error}`)
+          if (!example.drawn) throw new Error(`${name} ${example.id} draws nothing`)
+        }
+        await checkLayout(session, `${name} at ${width}px`)
+        if (width === 1280) examples.push(...drawn.map((example) => `${name}/${example.id}`))
       }
-      examples.push(...drawn.map((example) => `${name}/${example.id}`))
     }
 
     const menuShown = async (width) => {
@@ -230,6 +317,7 @@ async function checkGallery({ dist, prefix = '/', hosted = false, browser } = {}
         `(${CANVAS}?.querySelector('[data-foundations=${JSON.stringify(name)}]')?.textContent ?? '').length > 0`,
         `the ${name} foundations page`
       )
+      await checkLayout(session, `the ${name} foundations page`)
     }
 
     const hudPages = await session.evaluate(
@@ -286,6 +374,7 @@ async function checkGallery({ dist, prefix = '/', hosted = false, browser } = {}
         if (example.error) throw new Error(`HUD ${example.id} failed: ${example.error}`)
         if (!example.drawn) throw new Error(`HUD ${example.id} draws nothing`)
       }
+      await checkLayout(session, `the HUD ${showcase} page at ${width}px`)
     }
     // The HudScale section's live line shows the scale the HUD is drawn at, with hudScale.ts's bounds, and follows the
     // window when the width preset changes in place (the canvas resizes; it does not reload).
