@@ -1430,6 +1430,10 @@
           "kind": "regular"
         },
         {
+          "name": "hide-show.png",
+          "kind": "regular"
+        },
+        {
           "name": "menu-vertical.png",
           "kind": "regular"
         },
@@ -4094,7 +4098,15 @@
           "kind": "regular"
         },
         {
+          "name": "PhotoDetail.module.css",
+          "kind": "regular"
+        },
+        {
           "name": "PhotoDetail.tsx",
+          "kind": "regular"
+        },
+        {
+          "name": "PhotoPersonRow.tsx",
           "kind": "regular"
         },
         {
@@ -5198,6 +5210,10 @@
           "kind": "regular"
         },
         {
+          "name": "photoDetail.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "placesBrowser.test.tsx",
           "kind": "regular"
         },
@@ -5958,7 +5974,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bevy-api.ts",
-      "sha256": "3ff2c2d735e48309e20caf9d80fccded911eaf653b2b4e4c2ed6e5f3fbd3dbfb"
+      "sha256": "8347d7e5ecb514f0cca00362e395b0dcaee78eaa80170b309a9b4de5bec3480c"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bridge.ts",
@@ -6014,7 +6030,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/gallery.ts",
-      "sha256": "5003b68f51d959b4173131e6565ee73843493079367998bea4a76a4fa3871d5a"
+      "sha256": "2c9c8ddc51f4103f1526ee1f443bbb68373015a16e31b6cbb74281e6aa429de2"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/gifting.ts",
@@ -6258,7 +6274,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeGallery.test.ts",
-      "sha256": "e537bdf69eae99b6293066842b9efbfa57a7b66e8c560886110555ff0f2447fc"
+      "sha256": "42fe38d9648f597a8b2d2482bc887d2b93244b11e2e5e1801fbaa33e60f794e0"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeGifting.test.ts",
@@ -6605,7 +6621,7 @@
     },
     {
       "path": "library/explorer-core/engine/mockBridge.ts",
-      "sha256": "c49f1a72c5b82f9fc04c659933e02f3d8bb6acab0b1bac7c62c6c4cf7cc5381f"
+      "sha256": "c8cd36dedad57c6e33deb24f640e047beedb2fd6ee6799d0a209554b9463da22"
     },
     {
       "path": "library/explorer-core/engine/mockEvents.ts",
@@ -6645,7 +6661,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "34dac6e15f41b1ae4325a8c4ef987fe6ffc3265e7a7bad7ab6499643c5cafa3b"
+      "sha256": "ce349b8ae999f666c14f69c2fa9363405f2acbb54144652a93c4e9ff71f17899"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -7233,7 +7249,7 @@
     },
     {
       "path": "library/ui/apps/hud/App.tsx",
-      "sha256": "7895517f09780dbdd1694d3ba271d91fb2092daa06e4be4abe42a600df0c716c"
+      "sha256": "6308c1489dd529bb5b761052e407e78b819efb47935c4f526fea1b11a861897b"
     },
     {
       "path": "library/ui/apps/hud/assets/backpack/add-gradient.webp",
@@ -7458,6 +7474,10 @@
     {
       "path": "library/ui/apps/hud/assets/camera-reel/download.png",
       "sha256": "473c78dd4e392b061c4c0996d9f3ad2b6f05bf3c954ebf024aa5df7b65ce44c8"
+    },
+    {
+      "path": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "sha256": "0acc7a86f2cdf40e4c65d06c560ca239f5bd22edd6da3745fd4932cfc690166c"
     },
     {
       "path": "library/ui/apps/hud/assets/camera-reel/menu-vertical.png",
@@ -9077,11 +9097,11 @@
     },
     {
       "path": "library/ui/apps/hud/design/ScrollThumb.module.css",
-      "sha256": "b8b47ee2f1850050054e20aa0f8b35336bfd32837cc7d1d806aab1b82f830d90"
+      "sha256": "54528d30eeaeb19cfb163cd473128f0d4c12a1bef2d5fe46ade622e37bd10a31"
     },
     {
       "path": "library/ui/apps/hud/design/ScrollThumb.tsx",
-      "sha256": "fdc5f9fe9bc9ce82b8bb9c79dd2359eeb337feb82c45d594ce02ea4349e63575"
+      "sha256": "74be17a15f971de4f70204805368358e4bade69fd1243a17246c8e730787b9e2"
     },
     {
       "path": "library/ui/apps/hud/design/SearchField.module.css",
@@ -9101,7 +9121,7 @@
     },
     {
       "path": "library/ui/apps/hud/design/Showcase.tsx",
-      "sha256": "9dd8e4bd0874257710125b7dcaafb802db7fcd0bf9c715e4faad10a2e85c9309"
+      "sha256": "8395731dba46f8e1294d4472be20a446ecbef3a05559a5adf189ac576bed336a"
     },
     {
       "path": "library/ui/apps/hud/design/ShowcaseIndex.ts",
@@ -9645,7 +9665,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/gallery/DownloadedToast.module.css",
-      "sha256": "19e79b9238b2c6fec6c74c34485fc9bcbb8c45a3425c8073b9ef2af2073eb8b3"
+      "sha256": "7464132b7aecdb6ce7730d8116404d83b1d183aafa25695c809c599cc391eed2"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/DownloadedToast.tsx",
@@ -9653,11 +9673,11 @@
     },
     {
       "path": "library/ui/apps/hud/features/gallery/GalleryPage.module.css",
-      "sha256": "93ac13e487708c41dd53d94d03de68928cdfe11239d45617aa3e71c887269976"
+      "sha256": "fe5edaaadb5592ccff576a8c66b19b230fc9a13c62f614102b0e429729029747"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/GalleryPage.tsx",
-      "sha256": "357d3e3e271048d917fe6b446682ce155489c5dc11fef36df971cc82f4578a98"
+      "sha256": "f4f2c770065bb752a42e052ee9a721f56e13f1f4d7b573f80fd6aba15489c31b"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/PassportPhotos.module.css",
@@ -9665,11 +9685,19 @@
     },
     {
       "path": "library/ui/apps/hud/features/gallery/PassportPhotos.tsx",
-      "sha256": "25ed283fb0ed24ac6c8f1868c4b3653c4f48b29744287c946e3f9dec7e48cc22"
+      "sha256": "d6fafeb699a57cabf446683d6be4d1b0c454ec1631a4a445d960b12a4c8d64cc"
+    },
+    {
+      "path": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
+      "sha256": "6518abd6cfc39a84cb4a1b383236abf60808b43df85d1e7d16eb49627ece36a8"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
-      "sha256": "7dd567a3e6f1bcf158a281676b52965fed876787cf39850820ae22d4fd8dcdbe"
+      "sha256": "e2bc3b225008611ec20ad508945364df51009d9940cbe89faf103e514957fbd6"
+    },
+    {
+      "path": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "sha256": "e2493969d981e0e6cecdc875971ef05611bdb21ca133ca6becb949a5b2cafa49"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/ReelGrid.module.css",
@@ -9685,7 +9713,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/gallery/reelActions.ts",
-      "sha256": "bcf50ee56954cef67a32dc4fdfdd9c90fcf129f040d6b82a3de2ff9ab3059aa6"
+      "sha256": "41f386b0d29944ceca9809a3794f4a627b970905a2f3f7d7a553c0e34c0ad2b6"
     },
     {
       "path": "library/ui/apps/hud/features/gallery/useOwnReelActions.ts",
@@ -9781,7 +9809,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
-      "sha256": "72cddd0fb9ba6514e56353a81c3537cc4b54ce416221458fc99abb6aa09edbcd"
+      "sha256": "701c8310bec8dfcdd67fb0c476e6e23e213741f76d8142c7de75c79a635c1ee0"
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyCards.module.css",
@@ -9805,7 +9833,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
-      "sha256": "ff43e9fb816ca3894ee43971c389167e8fb9cc40762dae389dd2e11ad23898a0"
+      "sha256": "0e6a98da02bc59e3dcaf1b9e2ef1bd76fe922019c4bd3cfd881813416b98a866"
     },
     {
       "path": "library/ui/apps/hud/features/lobby/LobbyProfileMenu.module.css",
@@ -9885,7 +9913,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/map/MapPage.tsx",
-      "sha256": "4295f69739dcc88e0aba3d829f1b00e190b456fcb9517252c3cc730064c1986c"
+      "sha256": "86f2f00bbd045ebb3e1fe10546a22a04a83e4838a386888d8e7d17a22dd633b7"
     },
     {
       "path": "library/ui/apps/hud/features/map/MapToolbar.tsx",
@@ -10137,7 +10165,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/profile/Passport.tsx",
-      "sha256": "247b872acc380b3170c3c82231606573e79625e83b5a1231b8eeb09c5ce6deee"
+      "sha256": "33798ccd45bd5ece4ba140acda96b00e92791e338b7ec9fd6a60048911989670"
     },
     {
       "path": "library/ui/apps/hud/features/profile/ProfileEditForm.module.css",
@@ -10209,7 +10237,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "0a7ffee8b51d4f44847a35b4f00866287cc58ebdc84de8d5502e959d3328bce3"
+      "sha256": "42c8032cd12f29d2e9477510832f51bde200fe2931d96cdc4d07c08eb685e069"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -10485,7 +10513,7 @@
     },
     {
       "path": "library/ui/apps/hud/styles/tokens.css",
-      "sha256": "6db5d8eda817cb9e7c1530a5d5263c1747d9daefc9f16c089c7823d4b4a273eb"
+      "sha256": "b4e015fa64bee5f027ab11557869d2b389936e4f8fc23bdf80166c1a4d1bf732"
     },
     {
       "path": "library/ui/apps/hud/test/armedButton.test.tsx",
@@ -10557,7 +10585,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/harness.tsx",
-      "sha256": "60a1fd80b9f056dc774195c5f203e3ee0904a37b54111624ccea1de459896f28"
+      "sha256": "965c162cd0ef33cedd1a1dac3f1829961389f0d51e53d24cc81a6e410df5da07"
     },
     {
       "path": "library/ui/apps/hud/test/host.ts",
@@ -10745,11 +10773,11 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/gallery.page.test.tsx",
-      "sha256": "d2aec385234127d841196513ed2accbbce48c277c14d1fb409084f94e007173b"
+      "sha256": "a80640f470747cd82511a6103638a8872a7fb93cffbb4e33ac1af155dfb5cc35"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/gallery.test.tsx",
-      "sha256": "8c2d3e3b4dbb184947b0c9e6d28ec598452679126235c9d817e0861ce3e5850c"
+      "sha256": "f430e679991a8cf3bf62f27e0d6f37ef99966252945aca75d92dc278eccfcdaa"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/giftEntryPoints.test.tsx",
@@ -10805,7 +10833,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/lobby.test.tsx",
-      "sha256": "4744a714e7a27d233cd53ac3d1f82c28e58434f20b0d893111c6a9c8d2fc9def"
+      "sha256": "ec60db0f6e5d35c7f6ebc982f1508e2f93560e715ba264e153036aa95e9001b4"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/lobbyFriendLocations.test.tsx",
@@ -10885,7 +10913,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/hosted/passport.container.test.tsx",
-      "sha256": "74954fd0f3761c120a041ce0bd2bfc1cfd38a3d634c4b20be3bf31dcef274790"
+      "sha256": "dbaf9d31cf1ded2156eb3a00882bfb545cb021bd141f1ff59d28aa4236c12279"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/permissions.test.tsx",
@@ -11036,6 +11064,10 @@
       "sha256": "cf5cd9e9e4653e9b72e4ca7908194e4708d3a39ffa6c3bb3a715a230192e6293"
     },
     {
+      "path": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "sha256": "8828a32216fc360a7b4e967ce44eb6a73dd9de8d6ae0d201c6bfb8ffdec6cd3a"
+    },
+    {
       "path": "library/ui/apps/hud/test/placesBrowser.test.tsx",
       "sha256": "02b3fe51643472ea054ff62d9e5d84f78612b63d62b0d352733834ccd9706732"
     },
@@ -11053,7 +11085,7 @@
     },
     {
       "path": "library/ui/apps/hud/test/profile.passport.test.tsx",
-      "sha256": "748d05030106c3b03219966e0718a817622b8d2a143e0923a31778ab1b4c87be"
+      "sha256": "1a83638e8a033bb5cd25ba343cf43dc1b3d5de04c9b969f84a830b25e4f4e0dd"
     },
     {
       "path": "library/ui/apps/hud/test/profile.passportCreations.test.tsx",
@@ -14456,6 +14488,21 @@
     },
     {
       "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/App.tsx",
       "to": "library/ui/apps/hud/features/gate/EntryParamsDialog.tsx",
       "kind": "native:runtime"
     },
@@ -23846,6 +23893,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
       "to": "library/explorer-core/lib/cancelLayers.ts",
       "kind": "native:runtime"
     },
@@ -23857,6 +23919,156 @@
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
       "to": "library/explorer-core/lib/cancelLayers.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/copy-link.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/copy-link.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/copy-link.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/delete.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/delete.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/delete.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/download.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/download.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/download.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/share-x.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/share-x.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/camera-reel/share-x.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/friends/jump-in.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/friends/jump-in.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/friends/jump-in.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-left.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-left.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-left.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-right.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-right.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/arrow-right.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/close-thin.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/close-thin.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/close-thin.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/pin-outline.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/pin-outline.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/assets/map/panel/pin-outline.png",
       "kind": "test:runtime"
     },
     {
@@ -23876,17 +24088,32 @@
     },
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
-      "to": "library/ui/apps/hud/features/gallery/GalleryPage.module.css",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
       "kind": "native:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
-      "to": "library/ui/apps/hud/features/gallery/GalleryPage.module.css",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
       "kind": "production:runtime"
     },
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
-      "to": "library/ui/apps/hud/features/gallery/GalleryPage.module.css",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
       "kind": "test:runtime"
     },
     {
@@ -23947,6 +24174,126 @@
     {
       "from": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
       "to": "library/ui/apps/hud/lib/useWindowKeyDown.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/identity.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/identity.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/explorer-core/lib/identity.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/assets/events/arrow-down.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/assets/events/arrow-down.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/assets/events/arrow-down.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/backpack/categoryIcons.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/backpack/categoryIcons.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/backpack/categoryIcons.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.module.css",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
       "kind": "test:runtime"
     },
     {
@@ -24112,6 +24459,36 @@
     {
       "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
       "to": "library/explorer-core/lib/cefNativeBridge.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/lobby/checkmark-icn-thin.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/lobby/checkmark-icn-thin.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/lobby/checkmark-icn-thin.png",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/startup/warning.png",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/startup/warning.png",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "to": "library/ui/apps/hud/assets/startup/warning.png",
       "kind": "test:runtime"
     },
     {
@@ -24802,6 +25179,21 @@
     {
       "from": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
       "to": "library/ui/apps/hud/features/gallery/GalleryPage.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/ExploreSectionModal.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
       "kind": "test:runtime"
     },
     {
@@ -25957,6 +26349,21 @@
     {
       "from": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
       "to": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/lobby/LobbyHome.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
       "kind": "test:runtime"
     },
     {
@@ -27266,6 +27673,21 @@
     },
     {
       "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
       "to": "library/ui/apps/hud/features/map/CategoryStrip.tsx",
       "kind": "native:runtime"
     },
@@ -27517,6 +27939,21 @@
     {
       "from": "library/ui/apps/hud/features/map/MapPage.tsx",
       "to": "library/ui/apps/hud/features/menu/MainMenuShell.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/map/MapPage.tsx",
+      "to": "library/ui/apps/hud/features/profile/Passport.tsx",
       "kind": "test:runtime"
     },
     {
@@ -31957,6 +32394,21 @@
     {
       "from": "library/ui/apps/hud/features/profile/Passport.tsx",
       "to": "library/ui/apps/hud/features/friends/jumpToFriend.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/features/profile/Passport.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
       "kind": "test:runtime"
     },
     {
@@ -43942,6 +44394,81 @@
     {
       "from": "library/ui/apps/hud/test/pageWindow.test.ts",
       "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/explorer-core/lib/analytics.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/design/index.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/PhotoDetail.tsx",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/gallery/reelActions.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "to": "library/ui/apps/hud/features/session/profileStore.ts",
       "kind": "test:runtime"
     },
     {
@@ -47181,6 +47708,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/features/gallery/PhotoPersonRow.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/features/gallery/ReelGrid.tsx",
       "kind": "type"
     },
@@ -48546,6 +49078,11 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/photoDetail.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/placesBrowser.test.tsx",
       "kind": "type"
     },
@@ -49597,6 +50134,21 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
       "to": "library/ui/apps/hud/assets/camera-reel/download.png",
+      "kind": "test:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "kind": "native:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
+      "kind": "production:asset"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/vite.config.ts",
+      "to": "library/ui/apps/hud/assets/camera-reel/hide-show.png",
       "kind": "test:asset"
     },
     {

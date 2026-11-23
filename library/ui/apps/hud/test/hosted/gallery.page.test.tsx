@@ -29,6 +29,7 @@ function gallery(reel: GalleryPhoto[], over: Partial<GalleryState> = {}): Galler
     ),
     metas: {},
     loadPhoto: vi.fn(),
+    loadWearables: vi.fn(async () => []),
     setPublic: vi.fn(async () => ({ ok: true })),
     remove: vi.fn(async () => ({ ok: true, current: reel.length - 1, max: 500 })),
     ...over
@@ -42,7 +43,7 @@ function renderPage(g: GalleryState, props: Partial<Parameters<typeof GalleryPag
         gallery={g}
         profile={profile}
         onNavigate={vi.fn()}
-        onTeleport={props.onTeleport ?? vi.fn()}
+        onJumpIn={props.onJumpIn ?? vi.fn()}
         onViewProfile={props.onViewProfile ?? vi.fn()}
       />
       <PopupHost />
@@ -185,7 +186,7 @@ describe('GalleryPage', () => {
     const rerender = (open: boolean): void =>
       view.rerender(
         <>
-          <GalleryPage gallery={{ ...g, open }} profile={profile} onNavigate={vi.fn()} onTeleport={vi.fn()} onViewProfile={vi.fn()} />
+          <GalleryPage gallery={{ ...g, open }} profile={profile} onNavigate={vi.fn()} onJumpIn={vi.fn()} onViewProfile={vi.fn()} />
           <PopupHost />
         </>
       )
@@ -240,13 +241,13 @@ describe('GalleryPage', () => {
     expect(dispatchCancelLayer()).toBe(false)
   })
 
-  it('Jump In teleports to the photo parcel from its metadata', async () => {
-    const onTeleport = vi.fn()
-    renderPage(gallery(photos, { metas: { 'p-feb': { sceneName: 'Genesis Plaza', x: -9, y: 14 } } }), { onTeleport })
+  it('Jump In travels to where the photo was taken, from its metadata', async () => {
+    const onJumpIn = vi.fn(() => 'sent' as const)
+    renderPage(gallery(photos, { metas: { 'p-feb': { sceneName: 'Genesis Plaza', x: -9, y: 14, realm: 'main' } } }), { onJumpIn })
     const [first] = await loadThumbnails()
     await userEvent.click(first)
     await userEvent.click(screen.getByRole('button', { name: /Jump In/i }))
-    expect(onTeleport).toHaveBeenCalledWith(-9, 14)
+    expect(onJumpIn).toHaveBeenCalledWith({ realm: 'main', x: -9, y: 14 })
   })
 
   describe('photo options menu', () => {

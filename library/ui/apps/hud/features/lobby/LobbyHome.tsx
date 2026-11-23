@@ -40,6 +40,7 @@ import { eventCalendarUrl, eventCopyLink, eventShareUrl } from '../events/eventF
 import { lobbyEvents } from '../events/eventsStore'
 import { PhotoDetail } from '../gallery/PhotoDetail'
 import { useOwnReelActions } from '../gallery/useOwnReelActions'
+import { isWorldRealm } from '../gallery/reelActions'
 import { useReelList } from '../gallery/useReelList'
 import { useStoredProfile } from '../login/useStoredProfile'
 import { openPlaceDetail } from '../places/PlaceDetail'
@@ -712,12 +713,15 @@ export function LobbyHome({
             photos={reel.photos}
             index={photoIndex}
             meta={session.gallery.metas[reel.photos[photoIndex].id]}
-            isSelf
+            canEdit
             onIndex={setPhotoIndex}
             onLoadMeta={session.gallery.loadPhoto}
+            loadWearables={session.gallery.loadWearables}
             onClose={() => setPhotoIndex(null)}
-            onTeleport={(x, y) => {
-              if (pick({ kind: 'parcel', x, y })) setPhotoIndex(null)
+            onSetPublic={reelActions.setPublic}
+            onJumpIn={(place) => {
+              const dest: Destination = isWorldRealm(place.realm) ? { kind: 'world', realm: place.realm } : { kind: 'parcel', x: place.x, y: place.y }
+              if (pick(dest)) setPhotoIndex(null)
             }}
             onDelete={(photo) =>
               void reelActions.remove(photo).then((removed) => {

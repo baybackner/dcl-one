@@ -16,6 +16,8 @@ import { isRouteTo, navigation } from '@explorer-core/features/map/navigation'
 import { Navmap } from '@explorer-core/features/map/navmap'
 import { showToast } from '../../design'
 import { PhotoDetail } from '../gallery/PhotoDetail'
+import { travelToPhoto } from '../gallery/reelActions'
+import { openPassport } from '../profile/Passport'
 import { MainMenuShell } from '../menu/MainMenuShell'
 import { useOptionalSession } from '../session/SessionContext'
 import type { GalleryState, MapState, MinimapState, ProfileState, TravelOutcome } from '../session/useEngineSession'
@@ -290,13 +292,15 @@ export function MapPage({
           photos={photo.photos.map((ph) => ({ id: ph.id, url: ph.url, thumbnailUrl: ph.thumbnailUrl, dateTime: ph.dateTime ?? '' }))}
           index={photo.index}
           meta={gallery.metas[openPhoto.id]}
-          isSelf={false}
+          canEdit={false}
           onIndex={(index) => setPhoto({ photos: photo.photos, index })}
           onLoadMeta={gallery.loadPhoto}
+          loadWearables={gallery.loadWearables}
           onClose={() => setPhoto(null)}
-          onTeleport={(x, y) =>
+          onViewPerson={(u) => openPassport(u.address)}
+          onJumpIn={(place) =>
             go(
-              () => map.teleportToPlace(x, y),
+              () => travelToPhoto(place, map),
               () => {
                 setPhoto(null)
                 nav.clearInput()

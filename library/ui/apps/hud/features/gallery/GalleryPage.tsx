@@ -7,6 +7,7 @@ import { ReelGrid, type ReelGridLayout, type ReelGridMenu } from './ReelGrid'
 import { useReelList } from './useReelList'
 import { useOwnReelActions } from './useOwnReelActions'
 import type { GalleryState, ProfileState, TravelOutcome } from '../session/useEngineSession'
+import type { PhotoPlace } from './reelActions'
 import type { ChatUser } from '../chat/ProfileCardPresentation'
 import styles from './GalleryPage.module.css'
 
@@ -56,15 +57,15 @@ export function GalleryPage({
   gallery,
   profile,
   onNavigate,
-  onTeleport,
+  onJumpIn,
   onViewProfile,
   compact
 }: {
   gallery: GalleryState
   profile: ProfileState
   onNavigate: (page: string) => void
-  /** Jump to a photo's parcel (closes the gallery). */
-  onTeleport: (x: number, y: number) => TravelOutcome
+  /** Travel to where a photo was taken (closes the gallery). */
+  onJumpIn: (place: PhotoPlace) => TravelOutcome
   /** Open a captured person's passport. */
   onViewProfile?: (user: ChatUser) => void
   /** Hosted in the lobby's section modal; a photo opens over the whole screen. */
@@ -94,15 +95,17 @@ export function GalleryPage({
           photos: list.photos,
           index,
           meta: gallery.metas[selected.id],
-          isSelf: true,
+          canEdit: true,
           onIndex: (i) => {
             setIndex(i)
             list.loadMore(i)
           },
           onLoadMeta: gallery.loadPhoto,
+          loadWearables: gallery.loadWearables,
           onClose: () => setIndex(null),
-          onTeleport: (x, y) => {
-            const outcome = onTeleport(x, y)
+          onSetPublic: actions.setPublic,
+          onJumpIn: (place) => {
+            const outcome = onJumpIn(place)
             if (outcome === 'refused') return
             setIndex(null)
             if (compact != null) compact.onTravel()

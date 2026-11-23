@@ -292,7 +292,8 @@ describe('passport photos', () => {
     remove: vi.fn(async () => ({ ok: true })),
     metas: {},
     loadPhoto: vi.fn(),
-    onTeleport: vi.fn(() => true)
+    loadWearables: vi.fn(async () => []),
+    onJumpIn: vi.fn(() => true)
   })
   async function openPhotos(isSelf: boolean, a = actions()): Promise<PassportPhotoActions> {
     const fetcher = vi.fn(async (_address: string, offset: number, limit: number) => ({ ok: true, photos: reel.slice(offset, offset + limit), total: reel.length, max: 500 }))

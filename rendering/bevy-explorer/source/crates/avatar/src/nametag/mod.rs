@@ -129,6 +129,7 @@ impl Plugin for NametagPlugin {
                 resolve_voice,
                 show_tags,
                 retext_from_bridge,
+                answer_official_wallets,
                 show_chat_bubbles,
                 follow_glyph_atlas,
                 build_tags,
@@ -783,6 +784,15 @@ fn retext_from_bridge(
                 message_id: message_id.clone(),
                 message: message.clone(),
             });
+        }
+    }
+}
+
+/// The HUD marks the same wallets official as the nametags.
+fn answer_official_wallets(mut requests: EventReader<SystemApi>, wallets: Res<OfficialWallets>) {
+    for request in requests.read() {
+        if let SystemApi::GetOfficialWallets(sender) = request {
+            sender.send(wallets.0.iter().map(|a| format!("{a:#x}")).collect());
         }
     }
 }

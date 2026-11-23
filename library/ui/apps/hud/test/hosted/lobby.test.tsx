@@ -515,14 +515,14 @@ describe('lobby VIEW ALL of Communities and Gallery', () => {
     viewAll('Gallery')
     await openFirstPhoto()
     fireEvent.click(screen.getByRole('button', { name: /Jump In/i }))
-    expect(session.map.teleport).toHaveBeenCalledWith(-9, 14)
+    expect(session.map.teleportToPlace).toHaveBeenCalledWith(-9, 14)
     expect(screen.queryByRole('dialog', { name: 'Photo' })).toBeNull()
     expect(screen.queryByRole('dialog', { name: 'Gallery' })).toBeNull()
   })
 
   it('keeps the photo and the modal when the jump is refused', async () => {
     const session = withWidgets()
-    vi.mocked(session.map.teleport).mockReturnValue('refused')
+    vi.mocked(session.map.teleportToPlace).mockReturnValue('refused')
     render(lobbyWithPopups(session))
     viewAll('Gallery')
     await openFirstPhoto()

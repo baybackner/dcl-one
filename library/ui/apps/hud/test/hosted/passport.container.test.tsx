@@ -85,13 +85,13 @@ describe('Jump In from a passport photo', () => {
     const onClose = vi.fn()
     const s = await renderWithSession(<Passport userId="0xabc" initialTab="photos" onClose={onClose} />, (session) => {
       session.gallery.metas = { p0: { sceneName: 'Genesis Plaza', x: -9, y: 14 } }
-      session.map.teleport = vi.fn(() => outcome)
+      session.map.teleportToPlace = vi.fn(() => outcome)
     })
     const tile = await screen.findByRole('button', { name: 'Open photo' })
     fireEvent.load(tile.querySelector('img') as HTMLImageElement)
     await userEvent.click(tile)
-    await userEvent.click(screen.getByRole('button', { name: 'Jump In' }))
-    expect(s.map.teleport).toHaveBeenCalledWith(-9, 14)
+    await userEvent.click(screen.getByRole('button', { name: /Jump In/ }))
+    expect(s.map.teleportToPlace).toHaveBeenCalledWith(-9, 14)
     expect(onClose).toHaveBeenCalledTimes(closes)
     expect(screen.queryAllByRole('dialog', { name: 'Photo' })).toHaveLength(1 - closes)
   })
