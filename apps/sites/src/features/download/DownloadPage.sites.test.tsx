@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { track } from "@/core/lib/telemetry/track";
 
 import DownloadPage from "./DownloadPage";
+import { googlePlayHref } from "./google-play";
 import sitesLogo from "@dcl/one-ui/apps/sites/assets/dcl-logo.svg?url";
 
 vi.hoisted(() => Object.assign(window, { __vite_plugin_react_preamble_installed__: true }));
@@ -103,5 +104,32 @@ describe("legacy download Clicks (inventory 2.1.a)", () => {
       download_target: "app_store",
       os: "iOS",
     });
+  });
+});
+
+describe("the Google Play departure", () => {
+  it("tags both Google Play controls with the visitor's campaign over the site's defaults", () => {
+    const googlePlay = googlePlayHref("?utm_source=Partner&utm_campaign=Spring%20Drop");
+    render(<DownloadPage primary={WINDOWS} secondary={MACOS} android downloads={null} sid="s1" googlePlay={googlePlay} />);
+    const hrefs = [
+      screen.getByRole("link", { name: "Google Play" }).getAttribute("href"),
+      screen.getByRole("link", { name: /Get it on Google Play/ }).getAttribute("href"),
+    ];
+    for (const href of hrefs) {
+      const params = new URL(href!).searchParams;
+      expect(Object.fromEntries(params)).toMatchObject({
+        utm_org: "dclrgl",
+        utm_source: "partner",
+        utm_medium: "qr",
+        utm_campaign: "spring_drop",
+        utm_content: "android",
+        referrer: "utm_org=dclrgl&utm_source=partner&utm_medium=qr&utm_campaign=spring_drop&utm_content=android",
+      });
+    }
+  });
+
+  it("keeps the site's own tag without a campaign", () => {
+    render(<DownloadPage primary={WINDOWS} secondary={MACOS} android downloads={null} sid="s1" />);
+    expect(screen.getByRole("link", { name: /Get it on Google Play/ }).getAttribute("href")).toBe(googlePlayHref());
   });
 });

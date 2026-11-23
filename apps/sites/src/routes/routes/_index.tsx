@@ -13,6 +13,7 @@ import { WeeklyRituals } from "@dcl/one-ui/apps/sites/home/WeeklyRituals";
 import { ComeHangOut } from "@dcl/one-ui/apps/sites/home/ComeHangOut";
 import { homeEventHref } from "@/features/home/links";
 import { homeDownloadActions } from "@/features/home/actions";
+import { googlePlayHref } from "@/features/download/google-play";
 import { withDownloadClicks } from "@/features/home/download-clicks";
 import { trackDownloadClick } from "@/features/download/download-click";
 import { whatsOnCards } from "@/features/home/cards.server";
@@ -27,6 +28,7 @@ import { loadDownloadCounts } from "@/data/lib/download/counts.server";
 import { explorerInstallersUrl } from "@/data/lib/catalyst/bases";
 import { loadHomeLive } from "@/data/lib/catalyst/landings/home.server";
 import { sidLoader } from "@/core/lib/telemetry/page-loader";
+import { useAnalyticsUserId } from "@/core/lib/telemetry/page-view";
 import { track } from "@/core/lib/telemetry/track";
 
 import { homeMeta, publicBase } from "../lib/social-meta";
@@ -60,6 +62,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     content,
     downloads: downloads ?? DOWNLOADS_FALLBACK,
     platform: detectPlatform(request.headers.get("user-agent")),
+    googlePlay: googlePlayHref(new URL(request.url).search),
     installers: explorerInstallersUrl() !== null,
     cards: whatsOnCards(cards, profiles),
     faces: Object.fromEntries(
@@ -73,10 +76,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-  const { sid, platform, installers, downloads, cards, faces } = loaderData;
+  const { sid, platform, installers, downloads, cards, faces, googlePlay } = loaderData;
 
   const locale = useContext(SitesLocaleContext)?.locale ?? loaderData.locale;
   const copy = homeCopy[locale];
+  const userId = useAnalyticsUserId();
   const viewed = useRef(false);
   useEffect(() => {
     if (viewed.current) return;
@@ -85,8 +89,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
   }, [sid]);
 
   const { hero, hangOut, store, alternateStore, hangOutStore } = withDownloadClicks(
-    homeDownloadActions(platform, downloads, installers, copy.download),
-    (click) => trackDownloadClick(click, sid),
+    homeDownloadActions(platform, downloads, installers, copy.download, googlePlay),
+    (click) => trackDownloadClick(click, { sid, userId }),
   );
   const labels = {
     previous: copy.slides.previous,

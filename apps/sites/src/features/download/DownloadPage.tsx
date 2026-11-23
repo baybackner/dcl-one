@@ -10,6 +10,7 @@ import SitesLayout from "../components/chrome/SitesLayout";
 import { successHref, type Installer } from "@/data/lib/download/installers";
 
 import { trackDownloadClick, type DownloadClick } from "./download-click";
+import { googlePlayHref } from "./google-play";
 
 import appleLogo from "./assets/apple-logo.svg?url";
 import appStoreBadge from "./assets/download-on-the-app-store.svg?url";
@@ -28,9 +29,6 @@ const WearablePreview = lazy(() => import("@ui/wearable-preview/WearablePreview"
 const TITLE = "Download Decentraland\nand Come Hang Out!";
 const EPIC_URL = "https://store.epicgames.com/en-US/p/decentraland-b692fb";
 const APP_STORE_URL = "https://apps.apple.com/app/apple-store/id6478403840?pt=126284288&ct=Decentraland%20Home%20iOS&mt=8";
-// The Google Play listing, with the campaign parameters decentraland.org sends.
-const GOOGLE_PLAY_URL =
-  "https://play.google.com/store/apps/details?id=org.decentraland.godotexplorer&utm_org=dclrgl&utm_source=fdn&utm_medium=qr&utm_campaign=dclpage&utm_content=android&referrer=utm_org%3Ddclrgl%26utm_source%3Dfdn%26utm_medium%3Dqr%26utm_campaign%3Ddclpage%26utm_content%3Dandroid";
 
 const OS_LABEL: Record<Installer["os"], string> = { windows: "Windows", macos: "macOS" };
 const OS_IMAGE: Record<Installer["os"], string> = { windows: microsoftLogo, macos: appleLogo };
@@ -44,6 +42,10 @@ export type DownloadPageProps = {
   downloads: string | null;
   /** The visitor's anonymous id, for the download clicks. */
   sid: string;
+  /** The verified wallet, sent as the download clicks' `userId`. */
+  userId?: string | null;
+  /** The Google Play listing tagged with this visitor's campaign (`googlePlayHref`); the site's own tag by default. */
+  googlePlay?: string;
 };
 
 // The legacy /download page's attributes per control (decentraland/sites `DownloadOptions/DownloadOptions.tsx`,
@@ -56,9 +58,11 @@ const CLICKS = {
   googlePlay: { place: "download-page", event: "Download", download_target: "google_play", os: "Android" },
 } satisfies Record<string, DownloadClick>;
 
-function DownloadOptions({ primary, secondary, downloads, sid }: Pick<DownloadPageProps, "primary" | "secondary" | "downloads" | "sid">) {
+type OptionsProps = Pick<DownloadPageProps, "primary" | "secondary" | "downloads" | "sid" | "userId"> & { googlePlay: string };
+
+function DownloadOptions({ primary, secondary, downloads, sid, userId, googlePlay }: OptionsProps) {
   if (!primary?.url) return null;
-  const send = (click: DownloadClick) => () => trackDownloadClick(click, sid);
+  const send = (click: DownloadClick) => () => trackDownloadClick(click, { sid, userId });
   return (
     <div className={styles.actions}>
       <div className={styles.buttons}>
@@ -101,7 +105,7 @@ function DownloadOptions({ primary, secondary, downloads, sid }: Pick<DownloadPa
           <a className={styles.alternative} href={APP_STORE_URL} target="_blank" rel="noopener noreferrer" onClick={send(CLICKS.appStore)} aria-label="iOS">
             <img src={iosLogo} alt="" />
           </a>
-          <a className={styles.alternative} href={GOOGLE_PLAY_URL} target="_blank" rel="noopener noreferrer" onClick={send(CLICKS.googlePlay)} aria-label="Google Play">
+          <a className={styles.alternative} href={googlePlay} target="_blank" rel="noopener noreferrer" onClick={send(CLICKS.googlePlay)} aria-label="Google Play">
             <img src={googlePlayIcon} alt="" />
           </a>
         </div>
@@ -135,7 +139,15 @@ function AvatarPreview({ account }: { account: string }) {
   );
 }
 
-export default function DownloadPage({ primary, secondary, android, downloads, sid }: DownloadPageProps) {
+export default function DownloadPage({
+  primary,
+  secondary,
+  android,
+  downloads,
+  sid,
+  userId,
+  googlePlay = googlePlayHref(),
+}: DownloadPageProps) {
   const auth = useChromeAuth();
   const signedIn = auth.signedIn && !!auth.account;
   const page = (
@@ -169,7 +181,7 @@ export default function DownloadPage({ primary, secondary, android, downloads, s
             )}
             {/* The page's one heading: CSS shows this title on wide viewports and the one below on narrow ones, never both. */}
             <h1 className={styles.title}>{TITLE}</h1>
-            <DownloadOptions primary={primary} secondary={secondary} downloads={downloads} sid={sid} />
+            <DownloadOptions primary={primary} secondary={secondary} downloads={downloads} sid={sid} userId={userId} googlePlay={googlePlay} />
           </div>
         </div>
         <h1 className={styles.mobileTitle}>{TITLE}</h1>
@@ -178,10 +190,10 @@ export default function DownloadPage({ primary, secondary, android, downloads, s
       <div className={styles.share}>
         <a
           className={styles.storeButton}
-          href={android ? GOOGLE_PLAY_URL : APP_STORE_URL}
+          href={android ? googlePlay : APP_STORE_URL}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={() => trackDownloadClick(android ? CLICKS.googlePlay : CLICKS.appStore, sid)}
+          onClick={() => trackDownloadClick(android ? CLICKS.googlePlay : CLICKS.appStore, { sid, userId })}
         >
           <img className={styles.storeBadge} src={android ? googlePlayBadge : appStoreBadge} alt={android ? "Get it on Google Play" : "Download on the App Store"} />
         </a>

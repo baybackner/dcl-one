@@ -8,6 +8,7 @@ import { trackCreatorHubClick } from "@/features/download/creator-hub-click";
 
 import { loadLatestRelease, resolveDownload } from "@/data/lib/download/creator-hub.server";
 import { sidLoader } from "@/core/lib/telemetry/page-loader";
+import { useAnalyticsUserId } from "@/core/lib/telemetry/page-view";
 import { track } from "@/core/lib/telemetry/track";
 
 import { publicBase } from "../lib/social-meta";
@@ -33,6 +34,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
 export default function CreatorHubDownloadSuccessRoute({ loaderData }: Route.ComponentProps) {
   const { sid, os, retryUrl } = loaderData;
+  const userId = useAnalyticsUserId();
   const fired = useRef(false);
   useEffect(() => {
     if (fired.current) return;
@@ -56,7 +58,7 @@ export default function CreatorHubDownloadSuccessRoute({ loaderData }: Route.Com
               href: retryUrl || CREATOR_HUB_RELEASES,
               // The legacy footer reported only a retry of a known installer, through `useTrackClick`.
               onClick: retryUrl
-                ? () => trackCreatorHubClick("success-footer", sid, os === "windows" ? "Windows" : "macOS")
+                ? () => trackCreatorHubClick("success-footer", { sid, userId }, os === "windows" ? "Windows" : "macOS")
                 : undefined,
             },
           },

@@ -255,6 +255,30 @@ describe("track (fetch mocked)", () => {
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe("text/plain");
   });
 
+  it("adds the low-entropy userAgentData to every browser message's context, and leaves it out where there is none", async () => {
+    vi.stubGlobal("window", {
+      location: { href: "https://sites.example/", pathname: "/" },
+      __DCL_PUBLIC__: { SEGMENT_WRITE_KEY: "key-1" },
+    });
+    vi.stubGlobal("document", { referrer: "", title: "" });
+    const sendBeacon = vi.fn((_url: string, _body: Blob) => true);
+    const userAgentData = { brands: [{ brand: "Chromium", version: "131" }], mobile: true, platform: "Android", model: "Pixel" };
+    vi.stubGlobal("navigator", { userAgent: BROWSER_UA, language: "en", sendBeacon, userAgentData });
+    trackAny("evt", {}, CTX);
+    page("/", {}, CTX);
+    identify("0xabc", {}, CTX);
+    const contexts = await Promise.all(sendBeacon.mock.calls.map(async ([, blob]) => JSON.parse(await blob.text()).context));
+    expect(contexts).toHaveLength(3);
+    for (const context of contexts) {
+      expect(context.userAgentData).toEqual({ brands: [{ brand: "Chromium", version: "131" }], mobile: true, platform: "Android" });
+    }
+
+    sendBeacon.mockClear();
+    vi.stubGlobal("navigator", { userAgent: BROWSER_UA, language: "en", sendBeacon });
+    trackAny("evt", {}, CTX);
+    expect(JSON.parse(await sendBeacon.mock.calls[0]![1].text()).context).not.toHaveProperty("userAgentData");
+  });
+
   it("posts to the first-party proxy when SEGMENT_API_HOST is set, with or without a protocol or trailing slash", async () => {
     process.env.SEGMENT_WRITE_KEY = "key-1";
     process.env.SEGMENT_API_HOST = "api.e.example.org/v1/";

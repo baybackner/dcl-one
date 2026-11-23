@@ -4,7 +4,12 @@ import type { DownloadOption, OsKey } from "@/data/lib/download/creator-hub.serv
 import { track } from "@/core/lib/telemetry/track";
 import type { StoryId } from "@/core/lib/telemetry/story-id";
 
-import { trackDownloadClick, type DownloadClickOptions, type DownloadClickPlace } from "./download-click";
+import {
+  trackDownloadClick,
+  type DownloadClickOptions,
+  type DownloadClickPlace,
+  type DownloadClickSession,
+} from "./download-click";
 
 export const CREATOR_HUB_DOWNLOAD_STORY: StoryId = "landings/creator-hub-download";
 
@@ -29,17 +34,21 @@ export const CREATOR_HUB_CLICK_SURFACES = {
 export type CreatorHubClickSurface = keyof typeof CREATOR_HUB_CLICK_SURFACES;
 
 /** The legacy `Click` of a Creator Hub download link; `os` is the legacy option text ("macOS", "Windows"). */
-export function trackCreatorHubClick(surface: CreatorHubClickSurface, sid: string, os?: "macOS" | "Windows"): void {
+export function trackCreatorHubClick(
+  surface: CreatorHubClickSurface,
+  session: DownloadClickSession,
+  os?: "macOS" | "Windows",
+): void {
   const { place, options } = CREATOR_HUB_CLICK_SURFACES[surface];
   trackDownloadClick(
     { place, event: "Download", download_target: "creator_hub", ...(os ? { os } : {}) },
-    sid,
+    session,
     options,
   );
 }
 
 /** The click handler of an installer link: reports the download, then opens the install steps for that build. */
-export function useCreatorHubDownloadClick(sid: string, surface: CreatorHubClickSurface) {
+export function useCreatorHubDownloadClick({ sid, userId }: DownloadClickSession, surface: CreatorHubClickSurface) {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const cancel = () => {
@@ -62,14 +71,14 @@ export function useCreatorHubDownloadClick(sid: string, surface: CreatorHubClick
         { sid, story: CREATOR_HUB_DOWNLOAD_STORY },
       );
       // The legacy main button carried no `data-os`; each other build named its system.
-      trackCreatorHubClick(surface, sid, kind === "secondary" ? osText(option) : undefined);
+      trackCreatorHubClick(surface, { sid, userId }, kind === "secondary" ? osText(option) : undefined);
       // A click that opens the file elsewhere (a new tab or window) leaves this page where it is. Before a release
       // is read the link opens the releases page here, and nothing is downloading yet.
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || !option.fileName) return;
       if (timer.current !== null) clearTimeout(timer.current);
       timer.current = setTimeout(() => window.location.assign(successPath(option.osKey, option.arch)), SUCCESS_DELAY_MS);
     },
-    [sid, surface],
+    [sid, userId, surface],
   );
 }
 

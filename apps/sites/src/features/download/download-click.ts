@@ -1,6 +1,8 @@
 import { collectCampaignParams, type CampaignParams } from "@/core/lib/telemetry/campaign-params";
 import { track } from "@/core/lib/telemetry/track";
-import { detectMacChip, isTouchMac, type MacChip } from "@/data/lib/download/mac-chip";
+import { trackedUserDropped } from "@/core/lib/telemetry/tracked-user";
+
+import { legacyMacArch, type LegacyMacArch } from "./legacy-mac-arch";
 
 // The legacy site's `Click` for a download call to action (decentraland/sites `useDownloadClick` and
 // `useTrackClick` over `buildClickPayload`). Warehouse models read these rows by exact `place` and
@@ -34,7 +36,7 @@ type DownloadClickProps = CampaignParams &
   DownloadClick & {
     click_id?: string;
     clicked_at?: number;
-    mac_arch?: MacChip;
+    mac_arch?: LegacyMacArch;
     track_called_at: number;
     track_delivered_at: number;
     track_deferred: boolean;
@@ -76,21 +78,8 @@ function recordCorrelation(): Correlation {
   return correlation;
 }
 
-// The GPU cannot change during a page load: one WebGL read at most.
-let macArch: MacChip | null | undefined;
-
-/** Real Macs only: an iPhone never says "Macintosh", and an iPad that does has a touch screen. */
-function macArchHint(): MacChip | null {
-  if (macArch === undefined) {
-    macArch = /Macintosh/.test(navigator.userAgent) && !isTouchMac() ? detectMacChip() : null;
-  }
-  return macArch;
-}
-
-/** Test hook: forget the memoized chip so a test can change the User-Agent. */
-export function resetMacArchHint(): void {
-  macArch = undefined;
-}
+/** Who clicked: the session id, and the server-verified wallet when the visitor is signed in. */
+export type DownloadClickSession = { sid: string; userId?: string | null };
 
 /**
  * Sends the legacy `Click` for a download control. Merge order is the legacy one: the URL's `utm_*`, then the
@@ -98,12 +87,14 @@ export function resetMacArchHint(): void {
  */
 export function trackDownloadClick(
   click: DownloadClick,
-  sid: string,
+  { sid, userId }: DownloadClickSession,
   { conversion = true, correlate = true }: DownloadClickOptions = {},
 ): void {
   try {
     const calledAt = Date.now();
-    const arch = macArchHint();
+    const arch = legacyMacArch();
+    // A sign-out in progress leaves the account out before root's data has reloaded without it.
+    const user = userId && !trackedUserDropped() ? userId : undefined;
     const props: DownloadClickProps = {
       ...collectCampaignParams(),
       ...(correlate ? recordCorrelation() : {}),
@@ -114,7 +105,12 @@ export function trackDownloadClick(
       track_delivered_at: Date.now(),
       track_deferred: false,
     };
-    track("Click", props, { sid, legacy: true, ...(conversion ? { conversion: true } : {}) });
+    track("Click", props, {
+      sid,
+      ...(user ? { userId: user } : {}),
+      legacy: true,
+      ...(conversion ? { conversion: true } : {}),
+    });
   } catch {
     // Telemetry never breaks a download.
   }

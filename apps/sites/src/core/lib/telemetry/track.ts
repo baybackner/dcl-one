@@ -235,11 +235,19 @@ export type SegmentBody = SegmentTrackBody | SegmentPageBody | SegmentIdentifyBo
 type SegmentPage = { url: string; path: string; referrer: string; search: string; title: string };
 type SegmentCampaign = { name?: string; source?: string; medium?: string; term?: string; content?: string };
 
+/** The low-entropy `navigator.userAgentData` slice (Chromium only) the legacy beacon and analytics.js attach. */
+type SegmentUserAgentData = {
+  brands?: Array<{ brand: string; version: string }>;
+  mobile?: boolean;
+  platform?: string;
+};
+
 export type SegmentContext = {
   direct?: true;
   page?: SegmentPage;
   campaign?: SegmentCampaign;
   userAgent?: string;
+  userAgentData?: SegmentUserAgentData;
   locale?: string;
   timezone?: string;
   library: typeof LIBRARY;
@@ -329,17 +337,33 @@ function campaign(search: string): SegmentCampaign | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+/** Read synchronously: high-entropy values would need an awaited `getHighEntropyValues`. */
+function userAgentData(): SegmentUserAgentData | undefined {
+  try {
+    const data = typeof navigator !== "undefined"
+      ? (navigator as Navigator & { userAgentData?: SegmentUserAgentData }).userAgentData
+      : undefined;
+    if (!data) return undefined;
+    const { brands, mobile, platform } = data;
+    return { brands, mobile, platform };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Segment stamps `context.ip` only for a request marked `direct`, so the browser sets it and SSR does not. */
 function context(): SegmentContext {
   if (!isBrowser()) return { library: LIBRARY };
   const tz = timezone();
   const page = currentPage();
   const utm = campaign(page.search);
+  const uaData = userAgentData();
   return {
     direct: true,
     page,
     ...(utm ? { campaign: utm } : {}),
     userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+    ...(uaData ? { userAgentData: uaData } : {}),
     locale: typeof navigator !== "undefined" ? navigator.language : "",
     ...(tz ? { timezone: tz } : {}),
     library: LIBRARY,
