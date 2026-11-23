@@ -51,11 +51,19 @@ use crate::sky_preset::{
 
 const SHADER_PATH: &str = "embedded://shaders/stylized_sky.wgsl";
 const HORIZON_NOISE_PATH: &str = "embedded://sky/horizon_noise.png";
-/// One strip a cloud layer, in the order of `CLOUD_LAYERS`.
+/// One strip a cloud layer, in the order of `CLOUD_LAYERS`. Native ships them 4096 by 512, web
+/// 1024 by 128, the most it uploads (see the assets crate's build script).
+#[cfg(not(target_arch = "wasm32"))]
 const CLOUD_STRIP_PATHS: [&str; 3] = [
-    "embedded://sky/clouds_overhead.png",
-    "embedded://sky/clouds_low.png",
-    "embedded://sky/clouds_cumulus.png",
+    "embedded://sky/native/clouds_overhead.png",
+    "embedded://sky/native/clouds_low.png",
+    "embedded://sky/native/clouds_cumulus.png",
+];
+#[cfg(target_arch = "wasm32")]
+const CLOUD_STRIP_PATHS: [&str; 3] = [
+    "embedded://sky/web/clouds_overhead.png",
+    "embedded://sky/web/clouds_low.png",
+    "embedded://sky/web/clouds_cumulus.png",
 ];
 /// Turns a second a strip of speed 1 scrolls.
 const CLOUD_SCROLL_TURNS: f32 = 0.0004;

@@ -88,7 +88,10 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   cube, on every skybox. The compute model draws the same sky into the 1024 cube, one texel in
   64 a frame, for the reflections, the ambient and the stars' cloud cover: a cube texel is
   coarser than a strip texel and its refresh smears scrolling cloud, which those uses do not
-  show.
+  show. Native ships the strips at their authored 4096 by 512, about 11 texels a degree around
+  the sky. Web ships them at 1024 by 128: the wasm build resizes any image over 1024 to fit
+  (`reduce_image_sizes`), so larger files would only add to the download and to startup, and
+  the clouds look right at that size. The assets build script embeds only the target's set.
 - **The stylized sky is the sky for every scene, `PBSkybox` ones included.** Unity switches a
   sky that a scene controls (any `PBSun`, `PBSkybox` or fog) to its Legacy look; here the
   scene's values override the StylizedV1 lookup instead, and a scene with none sees the preset.
