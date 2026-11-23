@@ -39,7 +39,8 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
-  '.png': 'image/png'
+  '.png': 'image/png',
+  '.webp': 'image/webp'
 }
 const TIMEOUT = 20_000
 const BROWSERS = [
@@ -154,7 +155,10 @@ const LAYOUT = `(() => {
   const doc = ${CANVAS}
   const view = doc?.defaultView
   if (!doc || doc.readyState !== 'complete') return null
-  if ([...doc.images].some((image) => image.loading !== 'lazy' && !image.complete)) return null
+  // A lazy picture below the fold would never load in the headless window and escape the check: every picture loads
+  // now, and the check waits (within waitFor's bound) until each has loaded or failed.
+  for (const image of doc.images) if (image.loading === 'lazy') image.loading = 'eager'
+  if ([...doc.images].some((image) => image.getAttribute('src') && !image.complete)) return null
   const problems = []
   const where = (node) => (node.closest('[data-example]')?.dataset.example ?? '-')
   const name = (node) => node.tagName.toLowerCase() + (typeof node.className === 'string' && node.className ? '.' + node.className.split(' ')[0] : '')
