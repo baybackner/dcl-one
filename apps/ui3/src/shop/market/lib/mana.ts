@@ -13,7 +13,7 @@ import type { ManaWei } from "@shop/model/money";
 import { ERC20_ABI, manaToken } from "@shop/market/lib/contracts";
 import { sendMetaTransaction } from "./metaTx";
 import { readContract, rpc } from "./rpc";
-import { isTxPending, sendCall, TxPendingError, waitForReceipt, walletAccount, type WaitOptions } from "./tx";
+import { bounded, isTxPending, READ_TIMEOUT_MS, sendCall, TxPendingError, waitForReceipt, walletAccount, WalletAccountChangedError, type WaitOptions } from "./tx";
 
 export { parseManaInput } from "@shop/model/money";
 
@@ -44,20 +44,9 @@ const unconfirmedApprovals = new Map<string, string>();
 const approvalQueue = new Map<string, Promise<unknown>>();
 const approvalKey = (chainId: ChainId, owner: string, spender: string) => `${chainId}:${owner}:${spender.toLowerCase()}`;
 
-/** How long one reconciling read (an earlier approval's receipt, the allowance after it) may take. */
-const RECONCILE_READ_MS = 15_000;
-
 export function resetUnconfirmedApprovalsForTests(): void {
   unconfirmedApprovals.clear();
   approvalQueue.clear();
-}
-
-function bounded<T>(read: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("The read took too long.")), ms);
-  });
-  return Promise.race([read, late]).finally(() => clearTimeout(timer));
 }
 
 /** An earlier approval's receipt, read once within `ms`: no receipt, or no answer in time, is "unknown". */
@@ -84,8 +73,10 @@ function serialized<T>(key: string, decide: () => Promise<T>): Promise<T> {
 /**
  * Approves `spender` for `amount` MANA when the current allowance is short. Resolves null when nothing was
  * needed, else the confirmed hash. The exact amount, never an unlimited allowance. Decisions for one chain, owner
- * and spender run one after another, each reading its own allowance. While an earlier approval for that spender has
- * not been seen to end, a purchase its allowance does not cover throws `TxPendingError` with the earlier hash.
+ * and spender run one after another, each reading its own allowance, and each bound to the account it started on:
+ * a wallet on another account, or none, ends it before any prompt. While an earlier approval for that spender has
+ * not been seen to end, a purchase its allowance does not cover throws `TxPendingError` with the earlier hash. Every
+ * read is bounded (`wait.readTimeoutMs`): one that fails before sending sends nothing.
  */
 export async function ensureManaAllowance(opts: {
   provider: Eip1193Provider;
@@ -93,32 +84,48 @@ export async function ensureManaAllowance(opts: {
   spender: string;
   amount: bigint;
   wait?: WaitOptions;
-  /** Bound on each reconciling read; tests shorten it. */
-  readTimeoutMs?: number;
 }): Promise<string | null> {
   const owner = await walletAccount(opts.provider);
   const key = approvalKey(opts.chainId, owner, opts.spender);
   return serialized(key, () => decideApproval(opts, owner, key));
 }
 
+/** Throws unless the wallet is still on `owner` (a disconnected wallet throws walletAccount's own error). */
+async function stillOn(provider: Eip1193Provider, owner: string): Promise<void> {
+  if ((await walletAccount(provider)) !== owner) throw new WalletAccountChangedError();
+}
+
 async function decideApproval(
-  opts: { provider: Eip1193Provider; chainId: ChainId; spender: string; amount: bigint; wait?: WaitOptions; readTimeoutMs?: number },
+  opts: { provider: Eip1193Provider; chainId: ChainId; spender: string; amount: bigint; wait?: WaitOptions },
   owner: string,
   key: string,
 ): Promise<string | null> {
+  await stillOn(opts.provider, owner);
+  const ms = opts.wait?.readTimeoutMs ?? READ_TIMEOUT_MS;
+  const covered = () => bounded(hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount), ms);
   const earlier = unconfirmedApprovals.get(key);
   if (earlier) {
-    const ms = opts.readTimeoutMs ?? RECONCILE_READ_MS;
     if ((await approvalOutcome(opts.chainId, earlier, ms)) === "unknown") {
       // A covering allowance lets this purchase pass, but says nothing about the earlier approval: it stays recorded.
-      const covered = await bounded(hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount), ms).catch(() => false);
-      if (covered) return null;
+      if (await covered().catch(() => false)) {
+        await stillOn(opts.provider, owner);
+        return null;
+      }
       throw new TxPendingError(earlier, "The MANA approval");
     }
     // Mined or reverted: it no longer holds a second approval back.
     if (unconfirmedApprovals.get(key) === earlier) unconfirmedApprovals.delete(key);
   }
-  if (await hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount)) return null;
+  let enough: boolean;
+  try {
+    enough = await covered();
+  } catch {
+    throw new Error("We couldn't read your MANA allowance. Nothing was sent; try again in a moment.");
+  }
+  if (enough) {
+    await stillOn(opts.provider, owner);
+    return null;
+  }
   const mana = manaToken(opts.chainId);
   const hash = isPolygon(opts.chainId)
     ? await sendMetaTransaction({
@@ -126,15 +133,16 @@ async function decideApproval(
         contract: mana,
         kind: "collection",
         functionData: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [opts.spender as `0x${string}`, opts.amount] }),
+        account: owner,
       })
-    : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount] });
+    : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount], account: owner });
   unconfirmedApprovals.set(key, hash);
   try {
     const confirmed = await waitForReceipt(opts.chainId, hash, "The MANA approval", opts.wait);
     if (unconfirmedApprovals.get(key) === hash) unconfirmedApprovals.delete(key);
     return confirmed;
   } catch (e) {
-    // Reverted: ended. Still pending: kept for the next decision to reconcile.
+    // Reverted: ended. Still pending (an unanswered read included): kept for the next decision to reconcile.
     if (!isTxPending(e) && unconfirmedApprovals.get(key) === hash) unconfirmedApprovals.delete(key);
     throw e;
   }

@@ -43,6 +43,26 @@ export const APPROVAL_STILL_PENDING = "Your MANA approval is still confirming, s
 /** A buy dialog's answer when the MANA approval reverted: the sale was never sent. */
 export const APPROVAL_REVERTED = "Your MANA approval failed on-chain, so nothing was bought. Buy again to send a new one.";
 
+/** The wallet is no longer on the account a write was decided for: nothing was signed or sent. */
+export class WalletAccountChangedError extends Error {
+  override name = "WalletAccountChangedError";
+  constructor() {
+    super("Your wallet switched accounts during the purchase. Nothing was sent; switch back to the account you started with and try again.");
+  }
+}
+
+/** How long one chain read may take before it counts as a failed read. */
+export const READ_TIMEOUT_MS = 15_000;
+
+/** `read`, or a rejection once `ms` have passed without an answer (the read itself is left to finish). */
+export function bounded<T>(read: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("The read took too long.")), ms);
+  });
+  return Promise.race([read, late]).finally(() => clearTimeout(timer));
+}
+
 export function isTxReverted(e: unknown): e is TxRevertedError {
   return (e as { name?: string } | null)?.name === "TxRevertedError";
 }
@@ -84,12 +104,15 @@ export type WriteCall = {
   functionName: string;
   args: readonly unknown[];
   value?: bigint;
+  /** The account this call was decided for: another one on the wallet throws WalletAccountChangedError, unprompted. */
+  account?: string;
 };
 
 /** Sends one contract call from the wallet. Throws WrongNetworkError without prompting on another chain. */
 export async function sendCall(provider: Eip1193Provider, call: WriteCall): Promise<string> {
   await requireChain(provider, call.chainId);
   const from = await walletAccount(provider);
+  if (call.account && from !== call.account.toLowerCase()) throw new WalletAccountChangedError();
   const data = encodeFunctionData({ abi: call.abi, functionName: call.functionName, args: call.args } as never);
   const tx: Record<string, string> = { from, to: call.to, data };
   if (call.value) tx.value = `0x${call.value.toString(16)}`;
@@ -100,7 +123,14 @@ export async function sendCall(provider: Eip1193Provider, call: WriteCall): Prom
 
 type Receipt = { status?: string; transactionHash?: string; blockNumber?: string } | null;
 
-export type WaitOptions = { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number };
+export type WaitOptions = {
+  timeoutMs?: number;
+  pollMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** Bound on each read (READ_TIMEOUT_MS by default): a read that takes longer counts as a failed one. */
+  readTimeoutMs?: number;
+};
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -114,9 +144,9 @@ export async function waitForReceipt(chainId: ChainId, txHash: string, what = "T
   for (;;) {
     let receipt: Receipt = null;
     try {
-      receipt = await rpc<Receipt>(chainId, "eth_getTransactionReceipt", [txHash]);
+      receipt = await bounded(rpc<Receipt>(chainId, "eth_getTransactionReceipt", [txHash]), opts.readTimeoutMs ?? READ_TIMEOUT_MS);
     } catch {
-      // A failed read is not a revert: keep waiting until the deadline.
+      // A failed (or unanswered) read is not a revert: keep waiting until the deadline.
     }
     if (receipt?.status === "0x1") return txHash;
     if (receipt?.status === "0x0") throw new TxRevertedError(txHash);

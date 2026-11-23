@@ -1,4 +1,4 @@
-import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
+import { decodeFunctionData, type Hex } from "viem";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CHAIN } from "@shop/model/chain";
@@ -13,8 +13,8 @@ import { archiveBid, archivedBidIds, resetArchivedBidsForTests, unarchiveBid } f
 import { acceptBid, cancelBid, isBidTrade, placeBid } from "./bids";
 import { buyTradeWithMana, executeLegacyOrder, manaAllowanceFor } from "./executeOrder";
 import { ensureManaAllowance, resetUnconfirmedApprovalsForTests } from "../lib/mana";
-import { setRpcTransport } from "../lib/rpc";
-import { APPROVAL_REVERTED, purchaseFailure, TxPendingError, TxRevertedError } from "../lib/tx";
+import { APPROVAL_REVERTED, purchaseFailure, TxPendingError, TxRevertedError, type WaitOptions } from "../lib/tx";
+import type { Eip1193Provider } from "../../../data/auth/wallet";
 import { transferItem, transferProblem } from "./transfer";
 
 const MARKET = latestOffChainMarketplace(CHAIN.POLYGON).address;
@@ -209,15 +209,19 @@ describe("a MANA approval still confirming", () => {
   /** Each relayed approval gets its own hash, in order. */
   const approvalHash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
   let allowance = 0n;
+  let allowanceDown = false;
   const pending = new Set<string>();
   const reverted = new Set<string>();
+  const stalled = new Set<string>();
   /** What the chain does when the n-th approval is relayed (by default, nothing until a test says so). */
   let onRelay: (n: number) => void = () => {};
 
   beforeEach(() => {
     allowance = 0n;
+    allowanceDown = false;
     pending.clear();
     reverted.clear();
+    stalled.clear();
     onRelay = () => {};
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
       if (!String(url).endsWith("/transactions")) throw new Error(`unexpected fetch ${String(url)}`);
@@ -226,14 +230,75 @@ describe("a MANA approval still confirming", () => {
       return new Response(JSON.stringify({ ok: true, txHash: approvalHash(relayed.length) }));
     }) as typeof fetch;
     restore = fakeChain({
-      contracts: { [MANA_POLYGON]: { abi: [...ERC20_ABI, ...COLLECTION_V2_ABI], answer: (fn) => (fn === "allowance" ? allowance : 0n) } },
+      contracts: {
+        [MANA_POLYGON]: {
+          abi: [...ERC20_ABI, ...COLLECTION_V2_ABI],
+          answer: (fn) => {
+            if (fn !== "allowance") return 0n;
+            if (allowanceDown) throw new Error("the RPC is down");
+            return allowance;
+          },
+        },
+      },
       pending,
       reverted,
+      stalled,
     });
   });
 
-  const approve = (wallet = fakeWallet(), amount = AMOUNT, readTimeoutMs?: number) =>
-    ensureManaAllowance({ provider: wallet, chainId: CHAIN.POLYGON, spender: SPENDER, amount, wait: noWait, ...(readTimeoutMs ? { readTimeoutMs } : {}) });
+  /** A wallet whose account can change (or disconnect) between two purchases. */
+  function switchable(first = fakeWallet()) {
+    const box: { current: ReturnType<typeof fakeWallet> | null } = { current: first };
+    const provider: Eip1193Provider = {
+      request: (args) => (box.current ? box.current.request(args) : args.method === "eth_accounts" ? Promise.resolve([]) : Promise.reject(new Error("disconnected"))),
+    } as Eip1193Provider;
+    return { provider, box };
+  }
+
+  const approve = (wallet: Eip1193Provider = fakeWallet(), amount = AMOUNT, wait: WaitOptions = noWait) =>
+    ensureManaAllowance({ provider: wallet, chainId: CHAIN.POLYGON, spender: SPENDER, amount, wait });
+  const quick = { ...noWait, readTimeoutMs: 20 };
+
+  it("a purchase queued behind another ends unsigned and unsent once the wallet switched accounts", async () => {
+    const { provider, box } = switchable();
+    const other = fakeWallet({ key: `0x${"7".repeat(64)}` });
+    onRelay = () => {
+      box.current = other;
+    };
+    const [first, second] = await Promise.allSettled([approve(provider), approve(provider)]);
+    expect(first).toMatchObject({ status: "fulfilled", value: approvalHash(1) });
+    expect(second).toMatchObject({ status: "rejected", reason: { name: "WalletAccountChangedError" } });
+    expect(relayed).toHaveLength(1);
+    expect(other.signed).toHaveLength(0);
+  });
+
+  it("a purchase queued behind another ends unsent once the wallet disconnected", async () => {
+    const { provider, box } = switchable();
+    onRelay = () => {
+      box.current = null;
+    };
+    const [first, second] = await Promise.allSettled([approve(provider), approve(provider)]);
+    expect(first.status).toBe("fulfilled");
+    expect(second.status).toBe("rejected");
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("a first wait whose receipt read never answers ends pending on its hash, and the purchase queued behind it too", async () => {
+    stalled.add(approvalHash(1));
+    const wallet = fakeWallet();
+    const both = await Promise.allSettled([approve(wallet, AMOUNT, quick), approve(wallet, AMOUNT, quick)]);
+    expect(both.map((r) => r.status === "rejected" && (r.reason as TxPendingError).txHash)).toEqual([approvalHash(1), approvalHash(1)]);
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("an allowance read that fails before sending sends nothing, and frees the next purchase", async () => {
+    allowanceDown = true;
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toThrow(/couldn't read your MANA allowance/);
+    expect(relayed).toHaveLength(0);
+    allowanceDown = false;
+    await expect(approve(wallet)).resolves.toBe(approvalHash(1));
+  });
 
   it("two buys at once send one approval: the second waits for the first, then reads its own allowance", async () => {
     onRelay = () => {
@@ -272,18 +337,14 @@ describe("a MANA approval still confirming", () => {
     expect(relayed).toHaveLength(1);
   });
 
-  it("a receipt read that never answers stops the retry on the known hash in bounded time, and keeps it", async () => {
+  it("a retry whose receipt read never answers stops on the known hash in bounded time, and keeps it", async () => {
     pending.add(approvalHash(1));
     const wallet = fakeWallet();
     await expect(approve(wallet)).rejects.toBeInstanceOf(TxPendingError);
-    restore?.();
-    restore = setRpcTransport(async (_chainId, method) => {
-      if (method === "eth_getTransactionReceipt") return new Promise(() => {});
-      if (method === "eth_call") return encodeFunctionResult({ abi: ERC20_ABI, functionName: "allowance", result: 0n });
-      throw new Error(`unsupported ${method}`);
-    });
-    await expect(approve(wallet, AMOUNT, 20)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
-    await expect(approve(wallet, AMOUNT, 20)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    pending.delete(approvalHash(1));
+    stalled.add(approvalHash(1));
+    await expect(approve(wallet, AMOUNT, quick)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    await expect(approve(wallet, AMOUNT, quick)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
     expect(relayed).toHaveLength(1);
   });
 

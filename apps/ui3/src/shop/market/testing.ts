@@ -83,6 +83,8 @@ export function fakeChain(opts: {
   contracts?: Record<string, ContractStub>;
   reverted?: Set<string>;
   pending?: Set<string>;
+  /** Receipts whose read never answers (a stalled RPC). */
+  stalled?: Set<string>;
   calls?: { chainId: ChainId; method: string; params: unknown[] }[];
 }): () => void {
   const contracts = Object.fromEntries(Object.entries(opts.contracts ?? {}).map(([k, v]) => [k.toLowerCase(), v]));
@@ -98,6 +100,7 @@ export function fakeChain(opts: {
     }
     if (method === "eth_getTransactionReceipt") {
       const [hash] = params as [string];
+      if (opts.stalled?.has(hash)) return new Promise(() => {});
       if (opts.pending?.has(hash)) return null;
       return { status: opts.reverted?.has(hash) ? "0x0" : "0x1", transactionHash: hash };
     }
