@@ -3,6 +3,7 @@ import { EventDetailModal } from "@dcl/one-ui/apps/sites/events/DetailModal";
 import { GeneralAdd, GeneralDelete, GeneralGallery, GeneralInfoButton, GeneralLeftArrow, GeneralShowPreview } from "@dcl/one-ui/foundations/icons";
 import { Button } from "@dcl/one-ui";
 import { Button as SitesButton } from "@dcl/one-ui/apps/sites/shared/Button/Button";
+import { Busy } from "@dcl/one-ui/apps/sites/events/Busy";
 import { Notice, type NoticeTone } from "@dcl/one-ui/apps/sites/events/Notice";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { useMachine } from "@xstate/react";
@@ -14,7 +15,7 @@ import { HANGOUT_BOUNDS, isStepValid, toEventSchedule, type EventScheduleSource,
 import type { HangoutOptions } from "@/data/lib/catalyst/landings/hangout-options";
 import { heroWhen, scheduleLine } from "../../components/event-schedule";
 import styles from "./SubmitHangout.module.css";
-import HangoutAssociations, { AdminFields, CommunityField } from "./HangoutAssociations";
+import HangoutAssociations, { CommunityField } from "./HangoutAssociations";
 import FeaturedAssetPicker from "./FeaturedAssetPicker";
 import SelectControl from "./SelectControl";
 import SubmitSuccess from "./SubmitSuccess";
@@ -48,7 +49,6 @@ type SubmitHangoutProps = {
   onSignIn?: () => void;
   upload?: UploadFn;
   options?: HangoutOptions | null;
-  canEditAny?: boolean;
   privateFieldsEditable?: boolean;
   canChangeCommunity?: boolean;
   editor?: boolean;
@@ -73,7 +73,6 @@ export default function SubmitHangout({
   onSignIn,
   upload,
   options = null,
-  canEditAny = false,
   privateFieldsEditable = mode === "create",
   canChangeCommunity = mode === "create",
   editor = false,
@@ -105,7 +104,6 @@ export default function SubmitHangout({
       onSignIn={onSignIn}
       upload={upload}
       options={options}
-      canEditAny={canEditAny}
       privateFieldsEditable={privateFieldsEditable}
       canChangeCommunity={canChangeCommunity}
       onDelete={onDelete}
@@ -131,7 +129,6 @@ type InnerProps = {
   onSignIn?: () => void;
   upload?: UploadFn;
   options: HangoutOptions | null;
-  canEditAny: boolean;
   privateFieldsEditable: boolean;
   canChangeCommunity: boolean;
   onDelete?: () => void;
@@ -160,7 +157,6 @@ function SubmitHangoutInner({
   onSignIn,
   upload,
   options,
-  canEditAny,
   privateFieldsEditable,
   canChangeCommunity,
   onDelete,
@@ -240,7 +236,7 @@ function SubmitHangoutInner({
     FORM_ORDER.every((section) => isStepValid(section, d));
   const onEdit = (patch: Partial<HangoutDraft>) => send({ type: "EDIT", patch });
   const uploadFeedback = uploadError ? <Notice tone="error">{errorText(uploadError)}</Notice>
-    : uploading ? <Notice>{text("Uploading image…")}</Notice> : null;
+    : uploading ? <Busy>{text("Uploading image…")}</Busy> : null;
 
   const onUpload = upload ? (file: File, vertical: boolean) => { void uploadImage(file, vertical); } : undefined;
   const communityNotice = !communityAllowed && <Notice tone="error">{text("Choose a community you manage, or select None.")}</Notice>;
@@ -259,8 +255,8 @@ function SubmitHangoutInner({
           privateFieldsEditable={privateFieldsEditable}
           options={options}
         />
-        {section === "details" && (
-          <HangoutAssociations draft={d} options={options} canEditAny={canEditAny} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
+        {section === "details" && !editingInline && (
+          <HangoutAssociations draft={d} options={options} canChangeCommunity={canChangeCommunity} onEdit={onEdit} />
         )}
         {section === "details" && communityNotice}
       </>
@@ -302,12 +298,6 @@ function SubmitHangoutInner({
                 <div className={styles.detailsPanel}>
                   <div className={styles.sections}>
                     {reviewNotice && <Notice tone={reviewTone}>{reviewNotice}</Notice>}
-                    {canEditAny && (
-                      <fieldset className={styles.adminArea}>
-                        <legend>{text("Admin area")}</legend>
-                        <AdminFields draft={d} options={options} onEdit={onEdit} />
-                      </fieldset>
-                    )}
                     <h2>{text("Hangout Details")}</h2>
                     <ScheduleFields draft={d} onEdit={onEdit} />
                     <LocationFields draft={d} options={options} onEdit={onEdit} />
@@ -409,9 +399,9 @@ function SubmitHangoutInner({
         )}
 
         {value === "submitting" && (
-          <Notice>{text("Submitting your hangout for review…")}</Notice>
+          <Busy>{text("Submitting your hangout for review…")}</Busy>
         )}
-        {value === "submitted" && !needsSignIn && <SubmitSuccess mode={mode} approved={state.context.result?.approved ?? false} />}
+        {value === "submitted" && !needsSignIn && <SubmitSuccess mode={mode} approved={state.context.result?.approved ?? false} stillRejected={state.context.result?.rejected ?? false} />}
 
         {state.context.error && value === "review" && (
           <Notice tone="error">
@@ -591,7 +581,7 @@ function LocationFields({ draft, options, onEdit }: { draft: HangoutDraft; optio
  * The editor's page while the event to edit is read, or when that read failed and can be retried:
  * the same header, so nothing jumps when the form arrives.
  */
-export function SubmitHangoutLoading({ mode, error, onRetry, onSignIn }: { mode: "create" | "edit"; error?: string | null; onRetry?: () => void; onSignIn?: () => void }) {
+export function SubmitHangoutLoading({ mode, error, onRetry }: { mode: "create" | "edit"; error?: string | null; onRetry?: () => void }) {
   const { text, errorText } = useEventsCopy();
   return (
     <div className={`submit-hangout ${styles.authoring}`} data-editor>
@@ -601,12 +591,7 @@ export function SubmitHangoutLoading({ mode, error, onRetry, onSignIn }: { mode:
           <Notice tone="error">{errorText(error)}</Notice>
           {onRetry && <SitesButton variant="tertiary" onClick={onRetry}>{text("Retry")}</SitesButton>}
         </div>
-      ) : onSignIn ? (
-        <div className={styles.loadState}>
-          <Notice>{text("Sign in to edit your hangout.")}</Notice>
-          <SitesButton variant="primary" onClick={onSignIn}>{text("Sign in")}</SitesButton>
-        </div>
-      ) : <div className={styles.loadState}><Notice>{text("Loading your hangout…")}</Notice></div>}
+      ) : <Busy layout="page">{text("Loading your hangout…")}</Busy>}
     </div>
   );
 }

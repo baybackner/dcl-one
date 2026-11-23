@@ -31,12 +31,14 @@ import {
   type ExploreSection,
 } from "@/data/lib/catalyst/places/discover";
 import { primeDappsFlags } from "@/data/lib/feature-flags.browser";
-import { dappsFlagsAnswer } from "@/data/lib/feature-flags.server";
+import { dappsFlagsAnswer, isUnread } from "@/data/lib/feature-flags.server";
 import { openSignIn } from "@/features/components/auth/signin-store";
 import { detectPlatform, type DetectedPlatform } from "@/features/download/options";
 import { modalPlace, placeCard, placeJumpIn, type CreatorProfiles } from "@/features/places/cards";
 import { useBrowsePlaces, useLiveRail, useMemberPlaces, usePlaceCreators } from "@/features/places/hooks";
 
+import { PLACES_SECTION, destinationMeta, sectionCard } from "../lib/destination-meta";
+import { absoluteUrl, publicBase } from "../lib/social-meta";
 import type { Route } from "./+types/places";
 
 const STORY: StoryId = "misc/browse-places";
@@ -93,11 +95,8 @@ const COPY = {
   loadMore: "Load more places",
 };
 
-export function meta() {
-  return [
-    { title: "Places | Decentraland" },
-    { name: "description", content: "Discover places in Decentraland, see who is online, and find your next virtual destination." },
-  ];
+export function meta({ matches }: Route.MetaArgs) {
+  return destinationMeta(sectionCard(PLACES_SECTION), { url: absoluteUrl(publicBase(matches), "/places") });
 }
 
 export const handle = { agentMarkdown: "placesIndex" } satisfies AgentMarkdownHandle;
@@ -127,10 +126,12 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const view = readView(new URL(request.url).searchParams);
   const client = new QueryClient(QUERY_CLIENT_CONFIG);
   let unavailable = false;
-  // Live Now's head count, from the rollout flags this server holds; without an answer the rail keeps every scene.
+  // Live Now's head count, from the rollout flags this server holds. Null when the service has not answered yet
+  // (the "all off" stand-in is not a read): the rail keeps every scene, and the browser reads the flags later.
   const minUsers = dappsFlagsAnswer().then(
-    (answer) => liveMinUsersFrom((flag) => remoteFlagOn(answer, flag), (flag) => remoteFlagVariantIn(answer, flag)),
-    () => 0,
+    (answer) =>
+      isUnread(answer) ? null : liveMinUsersFrom((flag) => remoteFlagOn(answer, flag), (flag) => remoteFlagVariantIn(answer, flag)),
+    () => null,
   );
   const reads = Promise.all([
     view.section === "all"
@@ -163,7 +164,10 @@ export function headers() {
   return { Vary: "User-Agent" };
 }
 
-/** Live Now's head count this document knows: the server's answer it rendered, or a browser read that succeeded. */
+/**
+ * Live Now's head count this document knows: the server's answer it rendered, or a browser read that succeeded.
+ * A document rendered before the server had read the flags knows none, so its first client navigation reads them.
+ */
 let knownMinUsers: number | null = null;
 /** One browser read of this server's rollout flags per document that never had the server's answer. */
 let flagsRead: Promise<number | null> | null = null;
@@ -195,7 +199,7 @@ export default function Places({ loaderData }: Route.ComponentProps) {
   const serverMinUsers = server?.liveMinUsers;
   // Effects run only in the browser, so the module keeps this document's value and never a server request's.
   useEffect(() => {
-    if (serverMinUsers !== undefined) knownMinUsers = serverMinUsers;
+    if (typeof serverMinUsers === "number") knownMinUsers = serverMinUsers;
   }, [serverMinUsers]);
   return (
     <HydrationBoundary state={server?.dehydratedState}>

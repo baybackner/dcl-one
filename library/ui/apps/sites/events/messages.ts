@@ -333,13 +333,6 @@ const messages = {
     'イベントを管理するにはログインしてください。'
   ],
   'Sign in': ['Iniciar sesión', 'Se connecter', '登录', '로그인', 'ログイン'],
-  'Sign in to edit your hangout.': [
-    'Iniciá sesión para editar tu evento.',
-    'Connectez-vous pour modifier votre événement.',
-    '请登录以编辑你的活动。',
-    '이벤트를 편집하려면 로그인하세요.',
-    'イベントを編集するにはログインしてください。'
-  ],
   'Search hangouts': [
     'Buscar eventos',
     'Rechercher des événements',
@@ -759,42 +752,6 @@ const messages = {
     '커뮤니티 소유자와 관리자가 이 연결을 변경할 수 있습니다.',
     'コミュニティのオーナーとモデレーターがこの関連付けを変更できます。'
   ],
-  Schedules: ['Horarios', 'Horaires', '日程', '일정', 'スケジュール'],
-  'Could not load schedules: {error}': [
-    'No se pudieron cargar los horarios: {error}',
-    'Impossible de charger les horaires : {error}',
-    '无法加载日程：{error}',
-    '일정을 불러오지 못했습니다: {error}',
-    'スケジュールを読み込めませんでした：{error}'
-  ],
-  'No schedules are available.': [
-    'No hay horarios disponibles.',
-    'Aucun horaire disponible.',
-    '没有可用日程。',
-    '사용 가능한 일정이 없습니다.',
-    '利用できるスケジュールがありません。'
-  ],
-  'Unavailable schedule (remove association)': [
-    'Horario no disponible (quitar asociación)',
-    'Horaire indisponible (supprimer l’association)',
-    '日程不可用（移除关联）',
-    '사용할 수 없는 일정(연결 해제)',
-    '利用できないスケジュール（関連付けを削除）'
-  ],
-  'Custom join link': [
-    'Enlace de acceso personalizado',
-    'Lien d’accès personnalisé',
-    '自定义加入链接',
-    '맞춤 입장 링크',
-    'カスタム参加リンク'
-  ],
-  "Use the venue's default link": [
-    'Usar el enlace predeterminado del lugar',
-    'Utiliser le lien par défaut du lieu',
-    '使用地点的默认链接',
-    '장소의 기본 링크 사용',
-    '会場のデフォルトリンクを使用'
-  ],
   'Loading your hangout…': [
     'Cargando tu evento…',
     'Chargement de votre événement…',
@@ -823,6 +780,13 @@ const messages = {
     '你的活动已成功更新。',
     '이벤트가 업데이트되었습니다.',
     'イベントを更新しました。'
+  ],
+  'Your changes were saved, but the event is still rejected, so it is not back in review.': [
+    'Tus cambios se guardaron, pero el evento sigue rechazado, así que no volvió a revisión.',
+    'Vos modifications ont été enregistrées, mais l’événement reste refusé : il n’est pas revenu en examen.',
+    '你的更改已保存，但活动仍处于被拒绝状态，因此没有重新进入审核。',
+    '변경 사항이 저장되었지만 이벤트가 여전히 거부된 상태여서 다시 검토 대기열로 돌아가지 않았습니다.',
+    '変更は保存されましたが、イベントは却下されたままのため、審査には戻っていません。'
   ],
   'Back to Explore': [
     'Volver a explorar',

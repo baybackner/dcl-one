@@ -1,10 +1,6 @@
 .root,
-.community,
-.admin { display: flex; flex-direction: column; gap: var(--dcl-space-12); min-width: 0; }
+.community { display: flex; flex-direction: column; gap: var(--dcl-space-12); min-width: 0; }
 /* The wizard's global field label grows along the main axis; in this column it keeps its own height. */
 .columnLabel { flex: initial; }
-.schedules { border: 1px solid var(--dcl-transparencies-white-40); border-radius: var(--dcl-radius-sm); padding: var(--dcl-space-12); min-width: 0; }
-.schedules legend { padding-inline: var(--dcl-space-4); }
 .root :focus-visible,
-.community :focus-visible,
-.admin :focus-visible { outline: 2px solid var(--dcl-text-primary); outline-offset: 3px; }
+.community :focus-visible { outline: 2px solid var(--dcl-text-primary); outline-offset: 3px; }

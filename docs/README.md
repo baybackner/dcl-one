@@ -1,6 +1,7 @@
 # Engineering references
 
 - [Development](development.md)
+- [PR merge verification](pr-merge-verification.md)
 - [UI standards](ui-standards.md)
 - [UI component adoption](ui-components.md)
 - [Web app architecture standards](web-app-standards.md)
@@ -19,11 +20,13 @@
 - [Creator Hub ships as the desktop app only](adr/2026-11-19-creator-hub-desktop-only.md)
 - [Creators collections in Sites](adr/2026-11-19-creators-collections-in-sites.md)
 - [Shared Pulse and Explorer ENet](adr/2026-10-28-shared-pulse-enet.md)
+- [Pulse ENet interop evidence](adr/2026-11-23-pulse-enet-csharp-interop-evidence.md) (evidence)
 - [Explorer tests through the console](adr/2026-10-29-explorer-tests-through-the-console.md)
 - [Vendored Basis Universal transcoder](adr/2026-11-04-vendored-basisu.md)
 - [Opt-in UASTC texture upload](adr/2026-11-06-opt-in-uastc-texture-upload.md)
 - [Shared UI library](adr/2026-10-30-shared-ui-library.md)
 - [Shared UI import name](adr/2026-11-09-shared-ui-import-name.md)
+- [Hand-written mappings are checked against a tracked manifest](adr/2026-11-20-figma-mapping-manifest.md)
 - [Explorer HUD UI in `library/ui/apps/hud`](adr/2026-11-10-shared-explorer-hud-ui.md)
 - [Explorer vendored Bevy (superseded)](adr/2026-11-05-explorer-vendored-bevy.md)
 - [Explorer sources as upstream commits and patches](adr/2026-11-14-explorer-sources-as-patches.md)

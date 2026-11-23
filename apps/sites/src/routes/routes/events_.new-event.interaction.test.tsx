@@ -24,6 +24,7 @@ vi.mock("@/data/lib/catalyst/landings/hangout-options", async (original) => ({ .
 
 const EVENT_ID = "5f0c6a52-6b1d-4c1e-9a77-0e8f5b2c4d10";
 const EDIT_PATH = `/events/edit-event/${EVENT_ID}`;
+const CREATE_PATH = "/events/new-event";
 
 describe("when editing a hangout through its route", () => {
   let options: HangoutOptions;
@@ -39,9 +40,10 @@ describe("when editing a hangout through its route", () => {
   let scrollTo: ReturnType<typeof vi.spyOn>;
 
   function mount(path = `/events/edit-event/${EVENT_ID}`, eventId: string | null = EVENT_ID) {
-    const loaderData = { sid: "test", mode: "edit", eventId, communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
+    const mode = path === CREATE_PATH ? "create" : "edit";
+    const loaderData = { sid: "test", mode, eventId: mode === "create" ? null : eventId, communityId: "", categories: [], categoriesError: false, assignment: { variant: "wizard" } };
     router = createMemoryRouter([
-      { id: "hangout", path: "/events/edit-event/:id", Component: SubmitHangoutRoute as never, loader: () => loaderData },
+      { id: "hangout", path: mode === "create" ? CREATE_PATH : "/events/edit-event/:id", Component: SubmitHangoutRoute as never, loader: () => loaderData },
       { path: "/events", element: <h1>What's On</h1> },
     ], { initialEntries: [path], hydrationData: { loaderData: { hangout: loaderData } } });
     render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
@@ -78,8 +80,8 @@ describe("when editing a hangout through its route", () => {
 
     it("should show the editor header and a loading status before the footer", () => {
       expect(screen.getByRole("heading", { name: "Edit hangout" })).toBeTruthy();
-      expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
-      expect(screen.getByRole("status").dataset.tone).toBe("info");
+      expect(screen.getByRole("progressbar", { name: "Loading your hangout…" }).closest("[role=status]")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
       expect(screen.getByRole("status").compareDocumentPosition(screen.getByRole("contentinfo")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
@@ -154,23 +156,39 @@ describe("when editing a hangout through its route", () => {
       await waitFor(() => expect(openSignIn).toHaveBeenCalledWith({ redirectTo: EDIT_PATH }));
     });
 
-    it("should stay on the edit page with a sign-in action instead of leaving for the Events page", () => {
+    it("should stay on the edit page showing only the loading state, without reading the event", () => {
       expect(router.state.location.pathname).toBe(EDIT_PATH);
-      expect(screen.getByRole("status").textContent).toBe("Sign in to edit your hangout.");
-      expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+      expect(screen.getByRole("progressbar", { name: "Loading your hangout…" }).closest("[role=status]")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
       expect(authoring.loadEditableHangout).not.toHaveBeenCalled();
     });
+  });
 
-    describe("and the visitor closes the sign-in prompt and asks again", () => {
-      beforeEach(async () => {
-        await waitFor(() => expect(openSignIn).toHaveBeenCalledTimes(1));
-        await user.click(screen.getByRole("button", { name: "Sign in" }));
-      });
+  describe("and a signed-out visitor opens the create page", () => {
+    beforeEach(() => {
+      vi.mocked(useAuth).mockReturnValue({ identity: null, address: null, isConnected: false } as unknown as ReturnType<typeof useAuth>);
+      vi.mocked(getIdentity).mockReturnValue(null);
+      mount(CREATE_PATH);
+    });
 
-      it("should open sign-in again for this page", () => {
-        expect(openSignIn).toHaveBeenCalledTimes(2);
-        expect(router.state.location.pathname).toBe(EDIT_PATH);
-      });
+    it("should send the visitor to sign-in and back to the create page", async () => {
+      await waitFor(() => expect(openSignIn).toHaveBeenCalledWith({ redirectTo: CREATE_PATH }));
+      expect(openSignIn).toHaveBeenCalledTimes(1);
+    });
+
+    it("should show only the loading state, not the form or a sign-in button", () => {
+      expect(screen.getByRole("progressbar", { name: "Loading your hangout…" }).closest("[role=status]")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Event Name" })).toBeNull();
+    });
+  });
+
+  describe("and a signed-in visitor opens the create page", () => {
+    beforeEach(() => mount(CREATE_PATH));
+
+    it("should not ask for sign-in", async () => {
+      expect(await screen.findByRole("heading", { level: 1 })).toBeTruthy();
+      expect(openSignIn).not.toHaveBeenCalled();
     });
   });
 
@@ -194,7 +212,7 @@ describe("when editing a hangout through its route", () => {
     });
 
     it("should wait for access without exposing an editor or delete action", () => {
-      expect(screen.getByRole("status").textContent).toBe("Loading your hangout…");
+      expect(screen.getByRole("progressbar", { name: "Loading your hangout…" }).closest("[role=status]")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
       expect(screen.queryByRole("textbox", { name: "Hangout name" })).toBeNull();
     });
@@ -225,7 +243,7 @@ describe("when editing a hangout through its route", () => {
         });
 
         it("should open the delegated editor", async () => {
-          expect(await screen.findByRole("textbox", { name: "Custom join link" })).toBeTruthy();
+          expect(await screen.findByRole("button", { name: "Delete" })).toBeTruthy();
           expect(router.state.location.pathname).toBe(EDIT_PATH);
         });
       });
@@ -238,8 +256,8 @@ describe("when editing a hangout through its route", () => {
       });
 
       it("should show delegated controls while keeping owner fields private", () => {
-        expect(screen.getByRole("textbox", { name: "Custom join link" })).toBeTruthy();
         expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+        expect(screen.queryByRole("textbox", { name: "Custom join link" })).toBeNull();
         expect(screen.queryByRole("textbox", { name: "Contact email" })).toBeNull();
         expect(screen.queryByRole("textbox", { name: "Details for moderators" })).toBeNull();
         expect((screen.getByRole("combobox", { name: "Community" }) as HTMLSelectElement).disabled).toBe(true);
@@ -314,6 +332,29 @@ describe("when editing a hangout through its route", () => {
         await user.keyboard("{Escape}");
         expect(screen.getByRole("dialog")).toBeTruthy();
         await act(async () => finish());
+      });
+
+      it("should keep focus inside the dialog while the delete is in flight", async () => {
+        let fail: (reason: Error) => void = () => {};
+        vi.mocked(authoring.deleteHangout).mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+        await user.click(screen.getByRole("button", { name: "Delete event" }));
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByRole<HTMLButtonElement>("button", { name: "Deleting…" }).disabled).toBe(true);
+        expect(document.activeElement).toBe(dialog);
+        await user.tab();
+        expect(dialog.contains(document.activeElement)).toBe(true);
+        await act(async () => fail(new Error("Delete denied")));
+      });
+
+      it("should hand focus back to Delete when the delete fails", async () => {
+        let fail: (reason: Error) => void = () => {};
+        vi.mocked(authoring.deleteHangout).mockImplementationOnce(() => new Promise<void>((_, reject) => { fail = reject; }));
+        screen.getByRole("button", { name: "Delete event" }).focus();
+        await user.keyboard("{Enter}");
+        expect(document.activeElement).toBe(screen.getByRole("dialog"));
+        await act(async () => fail(new Error("Delete denied")));
+        expect(await within(screen.getByRole("dialog")).findByRole("alert")).toBeTruthy();
+        expect(document.activeElement).toBe(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete event" }));
       });
 
       it("should keep the editor open and report a failed delete in the dialog", async () => {

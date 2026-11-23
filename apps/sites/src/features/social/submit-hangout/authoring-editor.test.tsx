@@ -38,11 +38,19 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
     );
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.resetAllMocks();
+  });
 
-  it("should block preview and submission while required details are incomplete", () => {
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Preview" }).disabled).toBe(true);
-    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Submit Event" }).disabled).toBe(true);
+  describe("and the required details are incomplete", () => {
+    it("should block the preview", () => {
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: "Preview" }).disabled).toBe(true);
+    });
+
+    it("should block the submission", () => {
+      expect(screen.getByRole<HTMLButtonElement>("button", { name: "Submit Event" }).disabled).toBe(true);
+    });
   });
 
   it("should use the same upload path for dropping a cover", async () => {
@@ -65,15 +73,20 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
     expect(await screen.findByRole("img", { name: "Vertical hangout cover" })).toBeTruthy();
   });
 
-  it("should let the creator retry the same file after an upload failure", async () => {
-    upload.mockRejectedValueOnce(new Error("Cover upload failed"));
-    const picker = screen.getByLabelText("Upload cover image");
-    await user.upload(picker, image);
-    expect((await screen.findByRole("alert")).textContent).toBe("Cover upload failed");
-    expect(screen.getByRole("alert").dataset.tone).toBe("error");
-    await user.upload(picker, image);
-    expect(await screen.findByRole("img", { name: "Hangout cover" })).toBeTruthy();
-    expect(upload).toHaveBeenCalledTimes(2);
+  describe("and the first cover upload fails", () => {
+    beforeEach(() => {
+      upload.mockRejectedValueOnce(new Error("Cover upload failed"));
+    });
+
+    it("should let the creator retry the same file", async () => {
+      const picker = screen.getByLabelText("Upload cover image");
+      await user.upload(picker, image);
+      expect((await screen.findByRole("alert")).textContent).toBe("Cover upload failed");
+      expect(screen.getByRole("alert").dataset.tone).toBe("error");
+      await user.upload(picker, image);
+      expect(await screen.findByRole("img", { name: "Hangout cover" })).toBeTruthy();
+      expect(upload).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("and the required fields have been filled", () => {
@@ -126,16 +139,21 @@ describe("when a signed-in creator opens the single-page Events editor", () => {
       expect(screen.getByText("14/5000")).toBeTruthy();
     });
 
-    it("should keep the form and let the creator retry after a denied submission", async () => {
-      submit.mockRejectedValueOnce(new Error("Submission denied"));
-      await user.click(screen.getByRole("button", { name: "Submit Event" }));
-      await screen.findByText(/Submission denied/);
-      expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Open studio");
-      await user.click(screen.getByRole("button", { name: "Submit Event" }));
-      await screen.findByText("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
-      expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
-        draft: expect.objectContaining({ name: "Open studio", startDate: "2099-07-01", startTime: "18:30" }),
-      }));
+    describe("and the first submission is denied", () => {
+      beforeEach(() => {
+        submit.mockRejectedValueOnce(new Error("Submission denied"));
+      });
+
+      it("should keep the form and let the creator retry", async () => {
+        await user.click(screen.getByRole("button", { name: "Submit Event" }));
+        await screen.findByText(/Submission denied/);
+        expect(screen.getByRole("textbox", { name: "Hangout name" })).toHaveProperty("value", "Open studio");
+        await user.click(screen.getByRole("button", { name: "Submit Event" }));
+        await screen.findByText("Your event was created successfully. You'll be notified once it's approved. Track its status in \"My Events\"");
+        expect(submit).toHaveBeenLastCalledWith(expect.objectContaining({
+          draft: expect.objectContaining({ name: "Open studio", startDate: "2099-07-01", startTime: "18:30" }),
+        }));
+      });
     });
   });
 });
@@ -158,7 +176,10 @@ describe("when the single-page editor receives sign-in without remounting", () =
       </MemoryRouter>
     );
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.resetAllMocks();
+  });
 
   it("should enter the editor and record one start", async () => {
     const view = render(page(false));
@@ -226,6 +247,20 @@ describe("when an event is saved from the single-page editor", () => {
     });
   });
 
+  describe("and the submission is still running", () => {
+    beforeEach(async () => {
+      submit.mockReturnValueOnce(new Promise(() => {}));
+      render(page("create"));
+      await user.click(screen.getByRole("button", { name: "Submit Event" }));
+    });
+
+    it("should show a spinner named for the submission, with no failure", async () => {
+      const spinner = await screen.findByRole("progressbar", { name: "Submitting your hangout for review…" });
+      expect(spinner.closest("[role=status]")).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
   describe("and the new event comes back already approved", () => {
     beforeEach(async () => {
       submit.mockResolvedValueOnce({ id: "saved-event", approved: true });
@@ -247,6 +282,42 @@ describe("when an event is saved from the single-page editor", () => {
 
     it("should confirm the update", async () => {
       expect(await screen.findByText("Your event was updated successfully.")).toBeTruthy();
+    });
+  });
+
+  describe("and the saved event went back to review", () => {
+    beforeEach(async () => {
+      submit.mockResolvedValueOnce({ id: "saved-event", approved: false, rejected: false });
+      render(page("edit"));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+    });
+
+    it("should confirm the update", async () => {
+      expect(await screen.findByText("Your event was updated successfully.")).toBeTruthy();
+      expect(screen.queryByText(/still rejected/)).toBeNull();
+    });
+  });
+
+  describe("and the server kept the saved event rejected", () => {
+    beforeEach(async () => {
+      submit.mockResolvedValueOnce({ id: "saved-event", approved: false, rejected: true });
+      render(page("edit"));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await screen.findByRole("button", { name: "My Events" });
+    });
+
+    it("should say the changes were saved but the event is not back in review", () => {
+      expect(screen.getByRole("status").textContent).toBe("Your changes were saved, but the event is still rejected, so it is not back in review.");
+      expect(screen.queryByText("Your event was updated successfully.")).toBeNull();
+    });
+
+    it("should move focus to the message", () => {
+      expect(document.activeElement?.contains(screen.getByRole("status"))).toBe(true);
+    });
+
+    it("should offer the way back to My Events", async () => {
+      await user.click(screen.getByRole("button", { name: "My Events" }));
+      expect(router.state.location.pathname + router.state.location.search).toBe("/events?tab=my");
     });
   });
 

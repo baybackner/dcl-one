@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ComponentType } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToString } from "react-dom/server";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -53,7 +54,11 @@ function render(pattern: string, url: string, Component: ComponentType<{ loaderD
     ],
     { initialEntries: [url], hydrationData: { loaderData: { page: loaderData } } },
   );
-  return renderToString(<RouterProvider router={router} />);
+  return renderToString(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
 }
 
 const byPattern = new Map(Object.entries(MODULES).map(([file, mod]) => [patternOf(file), { file, mod }]));
@@ -81,6 +86,7 @@ describe("the /shop routes are ui3's route table", () => {
       const data: ShopPageData = { page: page.id, seo: defaultShopSeo(page.id), queries: [] };
       const html = render(pattern, urlOf(pattern), mod.default, data);
       expect(html, page.id).toContain("shop-chrome");
+      expect(html, page.id).toContain("data-site-layout-navigation");
     }
   });
 });
@@ -90,8 +96,7 @@ describe("server-read answers reach the first paint", () => {
   const fetchImpl = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input));
     const bodies: Record<string, unknown> = {
-      "/shop-api/v1/items": { data: [{ name: "Pirate Hat", thumbnail: "https://img.test/hat.png", creator: "0x1", rarity: "rare", category: "wearable", chainId: 137, network: "MATIC" }], total: 1 },
-      "/shop-api/v2/catalog": { data: [{ data: { wearable: { description: "A hat for pirates." } } }] },
+      "/shop-api/v1/items": { data: [{ name: "Pirate Hat", thumbnail: "https://img.test/hat.png", creator: "0x1", rarity: "rare", category: "wearable", chainId: 137, network: "MATIC", data: { wearable: { description: "A hat for pirates." } } }], total: 1 },
       "/shop-api/v1/collections": { data: [{ contractAddress: C, name: "Sea Things", creator: "0x1" }] },
       "/shop-api/v3/catalog/unified": { data: [], total: 0 },
     };

@@ -280,7 +280,7 @@ library/ui/
       Button.module.css
       Button.test.tsx
       Button.figma.ts   Figma mapping, read by the tooling only
-    chrome/             web chrome contexts and host adapters, imported by path
+    AppChrome/          web chrome contexts and host adapters, imported by path
   apps/
     <app>/              app-specific UI: components and styles used by one app
   index.ts              public foundation and component exports
@@ -364,8 +364,10 @@ Each host keeps only what is its own:
 - `App.tsx`, which renders the shared `HudApp` (`library/ui/apps/hud/App.tsx`)
   with the host's drivers and Shop page, and `lib/engineLaunch.ts`, the engine's
   launch for the shared `EngineHost`;
-- its global stylesheet (`styles/global.css`, which also gives the shared
-  stylesheets the host's public files as CSS variables such as `--hud-logo`);
+- its global stylesheet (`styles/global.css`), which imports the shared tokens
+  and page styles (`@hud/styles/tokens.css`, `@hud/styles/page.css`) and gives
+  the shared stylesheets the host's public files as CSS variables such as
+  `--hud-logo`;
 - what only one host has: react-web's benchmark autopilot
   (`engine/autopilot.ts`, `shell/localGuest.ts`) and Shop query client, and
   `/play`'s in-world Shop and Creator Hub editor embed.
