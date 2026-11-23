@@ -779,6 +779,51 @@ describe("a kept credits group the wallet was handed", () => {
     }
   });
 
+  /** The wallet sends the transaction, then answers `error` instead of its hash. */
+  const sendsThenThrows = (h: Harness, error: unknown) => {
+    const original = h.wallet.request.bind(h.wallet);
+    h.wallet.request = (async (args: { method: string; params?: unknown[] }) => {
+      const answer = await original(args as never);
+      if (args.method === "eth_sendTransaction") throw error;
+      return answer;
+    }) as typeof h.wallet.request;
+  };
+  const abort = () => Object.assign(new Error("The operation was aborted."), { name: "AbortError" });
+  const cancelledAfter = () => Object.assign(new Error("Request cancelled after broadcast"), { code: 4900 });
+  // A wallet's own 4100 after it sent proves nothing: only the page's guard refusing before the wallet does.
+  const walletUnauthorized = () => Object.assign(new Error("Unauthorized"), { code: 4100 });
+
+  it.each([
+    ["an abort", abort],
+    ["a 4900 that says cancelled", cancelledAfter],
+    ["a wallet's own 4100", walletUnauthorized],
+  ])("sent, then %s instead of its hash: held, its credit kept, on its own transaction and after the relay's refusal", async (_, error) => {
+    const direct = await harness();
+    sendsThenThrows(direct, error());
+    const fallback = await harness({ relay: "refuse", refuseStatus: 503 });
+    sendsThenThrows(fallback, error());
+    for (const [h, deps] of [
+      [direct, kept(direct, { gasless: false })],
+      [fallback, kept(fallback)],
+    ] as const) {
+      expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "pending", txHash: null });
+      expect(h.wallet.sent).toHaveLength(1);
+      expect(cancels(h)).toBe(0);
+    }
+  });
+
+  it("the page's guard refusing before the wallet still fails it and gives its credit back", async () => {
+    const h = await harness();
+    const original = h.wallet.request.bind(h.wallet);
+    h.wallet.request = (async (args: { method: string; params?: unknown[] }) => {
+      if (args.method === "eth_sendTransaction") throw Object.assign(new Error("Your sign-in changed meanwhile."), { name: "WalletRefusal", code: 4100 });
+      return original(args as never);
+    }) as typeof h.wallet.request;
+    expect(await runGroup(kept(h, { gasless: false }), h.group, h.resolved)).toMatchObject({ status: "failed" });
+    expect(h.wallet.sent).toHaveLength(0);
+    expect(cancels(h)).toBe(1);
+  });
+
   it("an explicit refusal in the wallet still fails it and gives its credit back", async () => {
     const h = await harness();
     h.wallet.next = "reject";

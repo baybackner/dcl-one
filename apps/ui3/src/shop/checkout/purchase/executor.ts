@@ -26,7 +26,7 @@ import type { GroupFailure, GroupProgress, PurchaseState } from "@shop/model/pur
 import { authorizeUsdCreditGroup, cancelUsdIntents, fetchUserPurchases, type SignedSession } from "@shop/credits/credits";
 import { gaslessEnabled } from "../chain/config";
 import { isGaslessUnavailable, isSignatureDeclined } from "../chain/metatx";
-import { isPendingTxError, isRevertedTxError } from "../chain/wallet";
+import { isPendingTxError, isRevertedTxError, isWalletRefusal } from "../chain/wallet";
 import { AuthorizationKind, getAuthorizationStatus, needsApprovalStep, ensureAuthorization, type ShopAuthorization } from "../lib/authorizations";
 import { friendlyError, isRejection, relayLimitText } from "../lib/errors";
 import { isWrongNetworkError } from "../lib/network";
@@ -116,10 +116,14 @@ function progressOf(store: CartStore, keyId: string): GroupProgress | null {
   return store.getSnapshot().checkout?.groups.find((g) => g.keyId === keyId) ?? null;
 }
 
-/** A provider's refusal of the request itself (EIP-1193 4100 unauthorized, 4200 unsupported): it never went to the chain. */
-function refusedUnsent(e: unknown): boolean {
-  const code = e && typeof e === "object" ? (e as { code?: unknown }).code : undefined;
-  return code === 4100 || code === 4200;
+/**
+ * The page's own guard refused the request before handing it to the wallet (/play's walletGuard `WalletRefusal`, EIP-1193
+ * 4100 or 4200): it never reached the wallet. Only that error says so; the same codes from a wallet prove nothing here.
+ */
+function refusedBeforeWallet(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  const { name, code } = e as { name?: unknown; code?: unknown };
+  return name === "WalletRefusal" && (code === 4100 || code === 4200);
 }
 
 function failureFor(e: unknown, kind?: GroupFailure["kind"]): GroupFailure {
@@ -314,10 +318,11 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       return { status: "pending", txHash: null };
     }
     if (txHash) return { status: "pending", txHash };
-    // A kept group the wallet was handed, answered without a hash and without a refusal that proves nothing was sent (the
-    // buyer's 4001, or a provider's 4100/4200, which refuse the request itself): a disconnect after it sent, a timeout, it may
-    // be on its way. Held, its credit kept, for its caller to find out by the node's record.
-    if (kept && walletHandedOff && !isRejection(e) && !isSignatureDeclined(e) && !refusedUnsent(e)) {
+    // A kept group the wallet was handed, answered without a hash and without a refusal that proves nothing was sent: the
+    // buyer's own in the wallet (4001, ACTION_REJECTED), or the page's guard refusing the request before passing it on.
+    // Anything else (a disconnect, an abort or a "cancelled" after it broadcast, a timeout) may be on its way: held, its
+    // credit kept, for its caller to find out by the node's record. What the buyer is told is another matter.
+    if (kept && walletHandedOff && !isWalletRefusal(e) && !refusedBeforeWallet(e)) {
       guard.unobservable(creditId);
       return { status: "pending", txHash: null };
     }
