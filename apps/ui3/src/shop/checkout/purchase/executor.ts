@@ -86,6 +86,13 @@ export type CheckoutDeps = {
    * A group kept this way is its caller's to attribute: a revert of the hash it was answered is never taken as its own here.
    */
   onCreditsEnvelope?: (bytes: Hex) => boolean | void;
+  /**
+   * With `onCreditsCall`: the group won't be kept after all, because its transaction is about to be sent by a contract
+   * account (a smart wallet), whose transaction carries its own call to itself, not the useCredits the group was kept with.
+   * The caller drops what it kept, and the group is followed as any Credits group is. False: the caller couldn't do that,
+   * and nothing is sent.
+   */
+  onCreditsUnkept?: () => boolean | void;
 };
 
 /** The MANA a unit's sale moves: a mint's price, or a MANA listing's after its coupon; null for a USD-pegged one. */
@@ -114,6 +121,12 @@ function dispatchSafe(store: CartStore, keyId: string, event: GroupEvent): void 
 
 function progressOf(store: CartStore, keyId: string): GroupProgress | null {
   return store.getSnapshot().checkout?.groups.find((g) => g.keyId === keyId) ?? null;
+}
+
+/** Whether `ctx.buyer` is a contract account on `chainId` (a read that fails is taken as not, as the relay takes it). */
+async function contractAccount(ctx: RailContext, chainId: number): Promise<boolean> {
+  const code = await ctx.reader.code(chainId as Parameters<RailContext["reader"]["code"]>[0], ctx.buyer).catch(() => "0x");
+  return !!code && code !== "0x";
 }
 
 /**
@@ -229,8 +242,8 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
     dispatchSafe(store, keyId, { type: "observed" });
   };
   const chainId = group.key.chainId;
-  const kept = !split && deps.onCreditsCall != null;
-  const onBuilt = kept ? (built: BuiltUseCredits) => deps.onCreditsCall!({ creditId, expiresAt: Math.floor(Number(credit.expiresAt)), built }) : undefined;
+  let kept = !split && deps.onCreditsCall != null;
+  const onBuilt = (built: BuiltUseCredits) => (kept ? deps.onCreditsCall!({ creditId, expiresAt: Math.floor(Number(credit.expiresAt)), built }) : undefined);
   // The bytes a kept group sends, kept before they go: only a revert of these very bytes can be its own.
   const keepEnvelope = (bytes: Hex): void => {
     if (deps.onCreditsEnvelope?.(bytes) === false) throw new CallNotKeptError();
@@ -279,6 +292,12 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       }
     }
     if (!settled) {
+      // A contract account's transaction is a call to itself, which carries no useCredits to read: such a group is
+      // followed as any Credits group is, never kept by a call it can't be found by.
+      if (kept && (await contractAccount(ctx, chainId))) {
+        if (deps.onCreditsUnkept?.() === false) throw new CallNotKeptError();
+        kept = false;
+      }
       await buyManyWithCredits(ctx, {
         purchases,
         onBuilt,

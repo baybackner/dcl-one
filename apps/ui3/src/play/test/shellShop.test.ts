@@ -19,7 +19,7 @@ import { createLedger, type OperationRecord } from '../shell/shop/ledger'
 import type { PurchaseIntent } from '../shell/shop/walletGuard'
 import { encodeUseCredits, idToSalt, type UseCreditsArgs } from '../../shop/checkout/purchase/encoding'
 import type { BuiltUseCredits } from '../../shop/checkout/purchase/credits'
-import { keccak256 } from 'viem'
+import { keccak256, type Hex } from 'viem'
 
 const BUYER = BOOK.buyer.toLowerCase()
 const OTHER = '0x' + '9'.repeat(40)
@@ -1498,6 +1498,37 @@ describe('a purchase of several items (the cart)', () => {
     const keysIn = (storage: Storage) => Array.from({ length: storage.length }, (_, i) => storage.key(i) ?? '')
     /** The prefixes a build that doesn't find a Credits purchase out by its call reads records under (4c29f0cca and before). */
     const OLDER = ['dcl-inworld-shop:record:v1:', 'dcl-inworld-shop:record:mana-v1:', 'dcl-inworld-shop:record:split-v1:']
+
+    it('follows a smart wallet’s purchase as any Credits purchase, its record back with them', async () => {
+      const storage = memoryStorage()
+      const after: string[][] = []
+      // The smart wallet's transaction is a call to itself: nothing in it reads as the group's useCredits.
+      const own = (call: string) => ({ to: BOOK.buyer, input: '0xdeadbeef' as Hex, call })
+      const t = setup({
+        storage,
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        evidence: () =>
+          ({
+            transaction: async (_c: number, hash: string) => (hash === hashOf('accept') ? own('accept') : hash === hashOf('storeBuy') ? own('storeBuy') : null),
+            receipt: async (_c: number, hash: string) => ({ transactionHash: hash, status: 'success', blockNumber: 1n })
+          }) as never,
+        run: async (deps, group) => {
+          const call = group.key.call.kind
+          deps.onCreditsCall?.(builtFor(call))
+          expect(deps.onCreditsUnkept?.()).toBe(true)
+          after.push(keysIn(storage).filter((k) => k.includes(':record:')))
+          return { status: 'confirmed', txHash: hashOf(call) }
+        }
+      })
+      const { operation } = await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await t.until('success')
+      expect(t.run).toHaveBeenCalledTimes(2)
+      // Back under the Credits records once unkept, never left under the kept ones.
+      expect(after[0]!.filter((k) => k.endsWith(operation))).toEqual([`dcl-inworld-shop:record:v1:${BUYER}:${operation}`])
+    })
 
     it('moves the group’s record out of an older build’s reach once its call is kept, before anything is signed', async () => {
       const storage = memoryStorage()

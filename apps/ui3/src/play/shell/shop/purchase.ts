@@ -2221,6 +2221,11 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
                   if (!op.sale) return false
                   op.sale = { ...op.sale, envelope: splitEnvelope(bytes) }
                   return keep(op)
+                },
+                // A smart wallet sends it as a call to itself: followed as any Credits purchase, its record back with them.
+                onCreditsUnkept: () => {
+                  op.sale = undefined
+                  return keep(op)
                 }
               }),
           ...(split

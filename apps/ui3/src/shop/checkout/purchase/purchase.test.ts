@@ -828,6 +828,36 @@ describe("a kept credits group the wallet was handed", () => {
     expect(cancels(h)).toBe(1);
   });
 
+  it("a smart wallet's purchase is unkept before its wallet sends it: after the relay's refusal and on its own transaction", async () => {
+    for (const gasless of [true, false]) {
+      const h = await harness();
+      // A contract account: the relay refuses it, and its transaction is a call to itself.
+      h.chain.code = async () => "0x6080604052";
+      const calls: string[] = [];
+      const deps = {
+        ...h.deps,
+        ctx: { ...h.deps.ctx, gasless },
+        onCreditsCall: () => void calls.push(`kept:${h.wallet.sent.length}`),
+        onCreditsEnvelope: () => void calls.push("envelope"),
+        onCreditsUnkept: () => void calls.push(`unkept:${h.wallet.sent.length}`),
+      };
+      await runGroup(deps, h.group, h.resolved);
+      // Unkept before the wallet was handed anything, and never kept again for the wallet's own transaction.
+      expect(calls).toEqual(gasless ? ["kept:0", "unkept:0"] : ["unkept:0"]);
+      expect(h.wallet.sent).toHaveLength(1);
+      expect(h.relay.posts).toHaveLength(0);
+    }
+  });
+
+  it("sends nothing when the caller couldn't unkeep a smart wallet's purchase", async () => {
+    const h = await harness();
+    h.chain.code = async () => "0x6080604052";
+    const deps = { ...h.deps, ctx: { ...h.deps.ctx, gasless: false }, onCreditsCall: () => true, onCreditsEnvelope: () => true, onCreditsUnkept: () => false };
+    expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "failed", failure: { kind: "refused" } });
+    expect(h.wallet.sent).toHaveLength(0);
+    expect(cancels(h)).toBe(1);
+  });
+
   it("an explicit refusal in the wallet still fails it and gives its credit back", async () => {
     const h = await harness();
     h.wallet.next = "reject";
