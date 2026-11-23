@@ -864,7 +864,7 @@ export function createAvatarScene(
     const bodyLc = bodyShape.toLowerCase();
     const byPointer = await fetchEntities(base, [bodyShape, ...wearables]);
     if (stale(gen)) return null;
-    const rules = computeHiding(wearables, byPointer);
+    const rules = computeHiding(wearables, byPointer, bodyShape, target.forceRender);
 
     const wantParts: { key: string; urn: string; isBody: boolean; entity: Entity }[] = [];
     const wantFeatures: { key: string; cat: string; entity: Entity }[] = [];
