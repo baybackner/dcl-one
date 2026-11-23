@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -27,7 +28,12 @@ function setup(create = vi.fn().mockResolvedValue({ id: "c 1", name: "Builders",
     ],
     { initialEntries: ["/communities/new"] },
   );
-  render(<RouterProvider router={router} />);
+  // StrictMode runs effects twice, as the dev server does: the kept draft must survive the second run.
+  render(
+    <StrictMode>
+      <RouterProvider router={router} />
+    </StrictMode>,
+  );
   return { router, create };
 }
 

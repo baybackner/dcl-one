@@ -20,7 +20,10 @@ export default function CreateCommunity({ trackCtx, create, signedOut, track }: 
   const navigate = useNavigate();
   // Read after hydration: the server never has the tab's kept draft.
   const [initial, setInitial] = useState<Partial<CommunityCreateInput>>();
-  useEffect(() => setInitial(takeDraft()), []);
+  useEffect(() => {
+    const kept = takeDraft();
+    if (kept) setInitial(kept);
+  }, []);
 
   return (
     <div className="create-community">
