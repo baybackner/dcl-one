@@ -283,7 +283,17 @@ scenes in that world (expected up to a few hundred).
 World quotas and usage exclude recorded retired identities, and exclude the
 parked legacy `world` bucket once that world has an active identity; unknown
 other legacy scopes still count. Storage rows remain retained and inaccessible
-through new scene scopes. Verify migration and recovery limits and measure quota-query costs before acceptance.
+through new scene scopes.
+
+The partial `world_scene_place_retired_identity_idx` on
+`(world_name, (identity::text)) WHERE NOT active` bounds the quota exclusion to
+retired identities in the requested world. It keeps the UUID-to-text comparison:
+legacy namespaces need not parse as UUIDs. The object pass blocks writes to the table until the migration transaction
+commits. For a concurrent build ahead of migration, use the definition from
+`schemas/21_world_scene_places.sql` and verify both `pg_index.indisvalid` and
+`pg_get_indexdef(indexrelid)`. Migration, bootstrap and status check only the
+name. Drop and rebuild any invalid or mismatched index before migration.
+See the [quota plan measurements](METRICS.md#wallet-presence-and-world-quota-lookups).
 
 The world discovery listing remains one aggregate per world. Scene listings and
 place detail read the shared identities joined to active deployments; neither
@@ -1183,6 +1193,20 @@ traffic is low-rate two-wallet writes and indexed existence probes, with at most
 one pending per normalized wallet; retained media depends on its connection and
 cleanup lifecycle. Capacity and production latency are not established by the
 functional tests.
+
+Wallet-scoped media probes use `private_voice_chat_participants_address_idx`
+and `community_voice_chat_users_address_idx`, both nonunique B-trees on
+`address`. These are separate from the pending-call party indexes. They retain
+every status so expiry predicates can use their existing timestamps without
+time-dependent partial indexes. See the [wallet probe measurements](METRICS.md#wallet-presence-and-world-quota-lookups).
+
+The object pass builds missing wallet indexes in the migration transaction,
+blocking writes to the indexed tables until the transaction commits. To build
+ahead, run each definition from `schemas/40_social.sql` with `CREATE INDEX
+CONCURRENTLY` outside a transaction. Migration, bootstrap and schema status
+check the index name only. Before migrating, verify `pg_index.indisvalid` and
+compare `pg_get_indexdef(indexrelid)` with the schema. Drop and rebuild an
+invalid or mismatched index before relying on it.
 
 Community detail, listing and member-request reads fetch voice status separately
 through the existing comms `VoiceDb` on the same pool and presence configuration.
