@@ -37,7 +37,7 @@ const PRESENT_TIMEOUT_MS = 10_000
 const RAIL_BUTTONS = [
   'Sidebar settings', // Sidebar config
   'Me', // My profile
-  'Map',
+  'Games',
   'Discover',
   'Shop', // Marketplace
   'System', // Help
@@ -56,7 +56,7 @@ const RAIL_BUTTONS = [
 const RAIL_ROWS: Array<{ button: string; rows: string[] }> = [
   { button: 'Me', rows: ['Backpack', 'Profile'] },
   { button: 'Camera', rows: ['Take A Shot', 'Gallery'] },
-  { button: 'Discover', rows: ['Events', 'Places', 'Communities'] },
+  { button: 'Discover', rows: ['Events', 'Places', 'Communities', 'Genesis City Map'] },
   { button: 'System', rows: ['Settings'] }
 ]
 

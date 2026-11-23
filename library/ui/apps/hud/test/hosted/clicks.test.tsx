@@ -62,7 +62,7 @@ describe('sidebar clicks', () => {
     await renderSettled(<Sidebar session={fakeSession()} />)
     const labels = screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
     expect(labels).toEqual([
-      'Sidebar settings', 'Me', 'Map', 'Discover', 'Shop', 'System', 'Notifications',
+      'Sidebar settings', 'Me', 'Games', 'Discover', 'Shop', 'System', 'Notifications',
       'Scene permissions', 'Skybox', 'Volume', 'Emotes', 'Friends', 'Camera', 'Nearby Voice', 'Chat'
     ])
   })

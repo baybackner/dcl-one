@@ -36,13 +36,15 @@ export interface UsePlaces {
   setSection: (s: PlacesSection) => void
 }
 
-export function usePlaces(account?: string | null): UsePlaces {
+/** `initialCategory`: the category chip selected when the browser opens (e.g. 'game' from the
+ *  Games button); unset, 'all'. */
+export function usePlaces(account?: string | null, initialCategory?: string): UsePlaces {
   const [places, setPlaces] = useState<DiscoverPlace[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, updateSearch] = useState('')
   // 'all' = no category filter; 'featured' = the curated set (only_highlighted).
-  const [category, updateCategory] = useState('all')
+  const [category, updateCategory] = useState(initialCategory ?? 'all')
   const [sort, updateSort] = useState<PlacesSort>('most_active')
   const [section, updateSection] = useState<PlacesSection>('all')
   const effectiveSort = section === 'all' ? sort : 'most_active'

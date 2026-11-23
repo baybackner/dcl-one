@@ -20,6 +20,17 @@ describe('Discover panel', () => {
     for (const name of ['Events', 'Places', 'Communities']) expect(screen.getByRole('button', { name })).toBeInTheDocument()
   })
 
+  it('with a map action, ends with the Genesis City Map row: no key, pressed while the minimap is kept, and it runs once and closes', async () => {
+    const onMap = vi.fn()
+    const props = panel({ onMap, mapShown: true })
+    expect(rows().map((r) => r.textContent)).toEqual(['Events', 'Places', 'Communities', 'Genesis City Map'])
+    const row = screen.getByRole('button', { name: 'Genesis City Map' })
+    expect(row).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(row)
+    expect(onMap).toHaveBeenCalledTimes(1)
+    expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('draws each bound key after its label, outside the row\'s name, and none for an unbound page', () => {
     panel({ eventsKey: 'X', communitiesKey: 'O' })
     expect(rows().map((r) => r.textContent)).toEqual(['Events[X]', 'Places', 'Communities[O]'])

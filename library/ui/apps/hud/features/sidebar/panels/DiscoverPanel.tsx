@@ -1,12 +1,14 @@
 // DiscoverPanel — the panel the Discover button opens: the three pages that list what there is to
-// do, each with the key that opens it. Events carries the count of live events and Communities the
-// mark of a live stream in one of the player's communities. The bar places it and closes it; every
-// action and every key comes in by props.
+// do, each with the key that opens it, and the Genesis City Map row that shows and hides the
+// minimap beside the bar. Events carries the count of live events and Communities the mark of a
+// live stream in one of the player's communities. The bar places it and closes it; every action
+// and every key comes in by props.
 
 import { CountBadge, MenuList, MenuPanel, MenuRow } from '../../../design'
 import eventsIcon from '../../../assets/sidebar-rail/discover-events.svg?no-inline'
 import placesIcon from '../../../assets/sidebar-rail/discover-places.svg?no-inline'
 import communitiesIcon from '../../../assets/sidebar-rail/discover-communities.svg?no-inline'
+import mapIcon from '../../../assets/sidebar-rail/map.svg?no-inline'
 import streamBadge from '../../../assets/voice/stream-badge.png'
 
 export interface DiscoverPanelProps {
@@ -23,6 +25,10 @@ export interface DiscoverPanelProps {
   onEvents: () => void
   onPlaces: () => void
   onCommunities: () => void
+  /** Show or hide the minimap (the Genesis City Map row); no row without it. */
+  onMap?: () => void
+  /** The minimap is set to show: the Genesis City Map row reads as pressed. */
+  mapShown?: boolean
   /** Called after a row's action, so the bar closes the panel. */
   onClose: () => void
 }
@@ -39,6 +45,8 @@ export function DiscoverPanel({
   onEvents,
   onPlaces,
   onCommunities,
+  onMap,
+  mapShown = false,
   onClose
 }: DiscoverPanelProps): React.JSX.Element {
   const pick = (act: () => void) => (): void => {
@@ -65,6 +73,7 @@ export function DiscoverPanel({
           trailing={communityStreamLive ? <img src={streamBadge} alt="A community stream is live" width={16} height={16} draggable={false} /> : undefined}
           onClick={pick(onCommunities)}
         />
+        {onMap != null && <MenuRow icon={art(mapIcon)} label="Genesis City Map" aria-pressed={mapShown} onClick={pick(onMap)} />}
       </MenuList>
     </MenuPanel>
   )

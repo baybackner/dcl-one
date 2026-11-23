@@ -14,6 +14,8 @@ import styles from './PlacesPage.module.css'
 
 export interface PlacesState {
   open: boolean
+  /** The category the page opens on (set by `openCategory`, e.g. 'game'); unset, 'all'. */
+  category?: string
   toggle: () => void
   close: () => void
 }
@@ -66,7 +68,8 @@ export function PlacesPage({
     >
       <div className={styles.page}>
         <MenuBackdrop />
-        <PlacesBrowser account={account} onPick={open} />
+        {/* keyed by the category so a new opening category starts the browser over */}
+        <PlacesBrowser key={places.category ?? 'all'} account={account} initialCategory={places.category} onPick={open} />
       </div>
     </MainMenuShell>
   )

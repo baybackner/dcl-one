@@ -34,6 +34,7 @@ export const PREF = {
   voiceUsed: 'nearbyVoiceUsed',
   launchCount: 'launchCount',
   gpuGuideSeen: 'hud.gpuGuideSeen',
+  gamesSeen: 'hud.gamesSeen',
   loginMusicMuted: 'hud.loginMusicMuted',
   askBeforeLeaving: 'hud.askBeforeLeaving'
 } as const

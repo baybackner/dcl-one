@@ -70,6 +70,7 @@ export function PlacesBrowser({
   account,
   headExtra,
   columns,
+  initialCategory,
   onPick
 }: {
   account?: string | null
@@ -77,9 +78,11 @@ export function PlacesBrowser({
   headExtra?: React.ReactNode
   /** The results grid's column count; unset, the page's five. */
   columns?: number
+  /** The category chip selected on open (one of CATEGORIES); unset, 'all'. */
+  initialCategory?: string
   onPick: (place: DiscoverPlace) => void
 }): React.JSX.Element {
-  const { places: list, loading, loadingMore, hasMore, loadMore, retry, error, search, setSearch, category, setCategory, sort, setSort, section, setSection } = usePlaces(account)
+  const { places: list, loading, loadingMore, hasMore, loadMore, retry, error, search, setSearch, category, setCategory, sort, setSort, section, setSection } = usePlaces(account, initialCategory)
   // Local input value, debounced into the hook's `search` so we don't refetch on every keystroke.
   const [draft, setDraft] = useState(search)
   const [sortOpen, setSortOpen] = useState(false)

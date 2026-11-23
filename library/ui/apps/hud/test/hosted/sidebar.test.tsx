@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { dispatchCancelLayer } from '@explorer-core/lib/cancelLayers'
 import { PopupHost, resetPopups, topPopupOrder } from '../../design/popups'
 import { getPref, PREF, setPref } from '@explorer-core/lib/prefs'
+import { countLaunch } from '@explorer-core/lib/launchCount'
 import { Sidebar } from '../../features/sidebar/Sidebar'
 import type { EngineSession } from '../../features/session/useEngineSession'
 import { renderSettled, fakeSession } from '../harness'
@@ -13,7 +14,7 @@ vi.mock('@hud-host', async (original) => ({ ...(await original<object>()), isNat
 // the confirmed sign-out loads the page again, which jsdom cannot do
 vi.mock('../../features/gate/signOutOfWorld', async (original) => ({ ...(await original<object>()), signOutOfWorld }))
 
-// the Map button shows the minimap, which reads the map's layers and the place under the player
+// Discover's Genesis City Map row shows the minimap, which reads the map's layers and the place under the player
 vi.mock('@explorer-core/features/map/mapApi', async (original) => ({
   ...await original<typeof import('@explorer-core/features/map/mapApi')>(),
   fetchLiveEvents: vi.fn(async () => []),
@@ -60,7 +61,7 @@ describe('sidebar parity', () => {
     expect(within(row).queryByRole('img', { name: 'A community stream is live' })).toBeNull()
   })
 
-  it.each(['Map', 'Discover', 'Shop', 'System', 'Notifications', 'Volume', 'Friends', 'Camera', 'Nearby Voice', 'Chat'])(
+  it.each(['Games', 'Discover', 'Shop', 'System', 'Notifications', 'Volume', 'Friends', 'Camera', 'Nearby Voice', 'Chat'])(
     '%s draws the bar\'s own glyph, not an icon-set glyph',
     async (name) => {
       await renderSettled(<Sidebar session={fakeSession()} />)
@@ -114,7 +115,7 @@ describe('sidebar parity', () => {
 describe('sidebar panels', () => {
   const PANELS: [string, string[]][] = [
     ['Me', ['Backpack', 'Profile', 'Exit']],
-    ['Discover', ['Events', 'Places', 'Communities']],
+    ['Discover', ['Events', 'Places', 'Communities', 'Genesis City Map']],
     ['System', ['Settings', 'FAQ', 'Report Bug', 'Contact Support', 'Discord']],
     ['Camera', ['Take A Shot', 'Gallery']]
   ]
@@ -311,17 +312,28 @@ describe('sidebar volume', () => {
 
 describe('sidebar map', () => {
   const map = (): HTMLElement | null => screen.queryByRole('region', { name: 'Map' })
+  const mapRow = (): HTMLElement => within(panel('Discover')!).getByRole('button', { name: 'Genesis City Map' })
+  /** Open Discover and pick its Genesis City Map row, which closes the panel. */
+  const pickMap = async (): Promise<void> => {
+    await press('Discover')
+    await userEvent.click(mapRow())
+  }
 
-  it('Map shows the minimap and hides it, and reads pressed while it shows', async () => {
+  it("has no Map button on the bar: Discover's Genesis City Map row shows the minimap and hides it, and reads pressed while it is kept", async () => {
     await renderSettled(<Sidebar session={fakeSession()} />)
+    expect(bar().queryByRole('button', { name: 'Map' })).toBeNull()
     expect(map()).toBeNull()
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'false')
-    await press('Map')
+    await press('Discover')
+    expect(mapRow()).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(mapRow())
+    expect(panel('Discover')).toBeNull()
     expect(within(map()!).getByRole('button', { name: 'Collapse minimap' })).toBeInTheDocument()
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'true')
-    await press('Map')
+    await press('Discover')
+    expect(mapRow()).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(mapRow())
+    expect(panel('Discover')).toBeNull()
     expect(map()).toBeNull()
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'false')
+    expect(getPref(PREF.sidebarMap)).toBe('0')
   })
 
   it('shows one minimap: the bar owns it, the page mounts none', async () => {
@@ -333,11 +345,11 @@ describe('sidebar map', () => {
 
   it('remembers the choice across remounts (the bar unmounts under full-screen pages)', async () => {
     const first = await renderSettled(<Sidebar session={fakeSession()} />)
-    await press('Map')
+    await pickMap()
     first.unmount()
     const second = await renderSettled(<Sidebar session={fakeSession()} />)
     expect(map()).not.toBeNull()
-    await press('Map')
+    await pickMap()
     second.unmount()
     await renderSettled(<Sidebar session={fakeSession()} />)
     expect(map()).toBeNull()
@@ -348,7 +360,6 @@ describe('sidebar map', () => {
     await renderSettled(<Sidebar session={fakeSession()} />)
     await press('Discover')
     expect(map()).toBeNull()
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'false')
     await press('Discover')
     expect(map()).not.toBeNull()
     // the Camera panel opens lower down, clear of the minimap
@@ -356,17 +367,14 @@ describe('sidebar map', () => {
     expect(map()).not.toBeNull()
   })
 
-  it('Map, pressed while a panel lies over the minimap, closes the panel and shows the minimap', async () => {
+  it('the row, picked while Discover covers a kept minimap, hides it and keeps it hidden', async () => {
     setPref(PREF.sidebarMap, '1')
     await renderSettled(<Sidebar session={fakeSession()} />)
-    await press('Discover')
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'false')
-    // a pointer press: the panel must not close before the button reads what shows
-    await press('Map')
-    expect(panel('Discover')).toBeNull()
     expect(map()).not.toBeNull()
-    expect(barButton('Map')).toHaveAttribute('aria-pressed', 'true')
-    expect(getPref(PREF.sidebarMap)).toBe('1')
+    await pickMap()
+    expect(panel('Discover')).toBeNull()
+    expect(map()).toBeNull()
+    expect(getPref(PREF.sidebarMap)).toBe('0')
   })
 
   it('the minimap gives its place to the notifications', async () => {
@@ -375,5 +383,51 @@ describe('sidebar map', () => {
     s.notifications = { ...s.notifications, open: true }
     await renderSettled(<Sidebar session={s} />)
     expect(map()).toBeNull()
+  })
+})
+
+// Games: the first button under Me, opening Places on its game category; on this device's first
+// launch it draws attention until its first press.
+describe('sidebar games', () => {
+  /** Count one more launch on top of `before` earlier ones. */
+  const launchAfter = (before: number): void => {
+    setPref(PREF.launchCount, String(before))
+    countLaunch()
+  }
+  beforeEach(() => setPref(PREF.gamesSeen, '0'))
+
+  it('sits right under Me, in the place Map had', async () => {
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    const names = bar().getAllByRole('button').map((b: HTMLElement) => b.getAttribute('aria-label'))
+    expect(names.slice(0, 4)).toEqual(['Sidebar settings', 'Me', 'Games', 'Discover'])
+  })
+
+  it('opens Places on the game category and closes an open panel', async () => {
+    const s = fakeSession()
+    await renderSettled(<Sidebar session={s} />)
+    await press('Discover')
+    await press('Games')
+    expect(vi.mocked(s.places.openCategory)).toHaveBeenCalledExactlyOnceWith('game')
+    expect(panel('Discover')).toBeNull()
+  })
+
+  it('on the first launch, draws attention until its first press, and not again after a remount', async () => {
+    launchAfter(0)
+    const first = await renderSettled(<Sidebar session={fakeSession()} />)
+    expect(barButton('Games')).toHaveAttribute('data-attention')
+    // the static dot reduced motion shows is drawn, hidden from assistive tech
+    expect(barButton('Games').querySelector('span[aria-hidden="true"]')).not.toBeNull()
+    await press('Games')
+    expect(barButton('Games')).not.toHaveAttribute('data-attention')
+    expect(getPref(PREF.gamesSeen)).toBe('1')
+    first.unmount()
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    expect(barButton('Games')).not.toHaveAttribute('data-attention')
+  })
+
+  it('draws no attention after the first launch, pressed or not', async () => {
+    launchAfter(1)
+    await renderSettled(<Sidebar session={fakeSession()} />)
+    expect(barButton('Games')).not.toHaveAttribute('data-attention')
   })
 })

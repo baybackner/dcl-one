@@ -71,8 +71,8 @@ export async function failureEvidence(console_: Console, timeoutMs = EVIDENCE_TI
 /** The rail buttons of the panels that open beside the rail, which leave it uncovered: each reads
  *  pressed while its panel is open. (The rail's top button, `WORLD_HUD`, takes a click only with
  *  nothing over the world: a page hides the rail, a popup such as the passport covers it.) The
- *  rail's Map button is not one: it reads pressed for as long as the minimap shows, which is a
- *  HUD at rest. */
+ *  minimap showing is a HUD at rest: its switch is a row of the Discover panel, read only while
+ *  that panel is open. */
 export const RAIL_PANELS = ['Notifications', 'Skybox', 'Emotes', 'Friends'] as const
 /** The rail buttons whose panel is a list of rows beside the rail, one open at a time: each panel
  *  is a `dialog` named as its button, and Escape closes it. */

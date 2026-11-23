@@ -223,8 +223,8 @@ What the driver does for every scenario, so a spec need not:
   rail's top button takes a click (a page hides the rail, a popup covers it), no panel beside the
   rail reads pressed, none of the rail's lists of rows is open (Me, Discover, Shop, System, Volume,
   Camera: each a dialog named as its button), the rail's settings popover is closed and no field
-  holds the keys (`/world_state`'s `keyboardClaimed`). The rail's Map button reads pressed while
-  the minimap shows, which is a HUD at rest. The rail is read once it holds still (sliding in, it reads
+  holds the keys (`/world_state`'s `keyboardClaimed`). The minimap showing is a HUD at rest: its
+  switch is the Discover panel's Genesis City Map row. The rail is read once it holds still (sliding in, it reads
   as covered with nothing open). Each press waits for the HUD to show it took effect (a layer
   gone, the rail done sliding back in, and after leaving the chat input the engine told of it)
   before the next. A HUD already at rest gets no Escape; a client with no HUD (the standalone
@@ -306,7 +306,7 @@ test is in the spec file's header. Port 48, Partial 35, Gap 4, Drop 2.
 | ExplorePanel (7) | `explore-panel` | 6 | 1 | | | Pages instead of one panel, each opened by a row of the rail's Discover, Me or System panel; the top bar's Shop tab is not driven |
 | Shortcuts (7) | `shortcuts` | 6 | 1 | | | Gallery is `G`, not `K` |
 | Navbar (4) | `navbar` | | 3 | 1 | | A fixed rail set, no flags, the other entries rows of the Me, Discover and System panels; the help rows are in the System panel, which has no controls row |
-| Minimap (5) | `minimap` | 4 | 1 | | | The rail's Map button shows the minimap; the dots menu adds the minimap's own settings; name and compass are unreadable text |
+| Minimap (5) | `minimap` | 4 | 1 | | | The Genesis City Map row of the rail's Discover panel shows the minimap; the dots menu adds the minimap's own settings; name and compass are unreadable text |
 | Navmap (1) | `navmap` | 1 | | | | `Sports`, not `Sport` |
 | Events (3) | `events` | 2 | 1 | | | The detail opens for the first event the service lists, when there is one |
 | Places (5) | `places` | | 4 | 1 | | Tabs, category chips and Filter & Sort, without counters; a card opens the place's detail, which no scenario opens yet |

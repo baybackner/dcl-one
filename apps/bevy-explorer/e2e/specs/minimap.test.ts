@@ -1,5 +1,5 @@
-// explorer-automation `MinimapTests` (5): the minimap widget beside the rail, which the rail's Map
-// button shows and hides.
+// explorer-automation `MinimapTests` (5): the minimap widget beside the rail, which the Genesis City
+// Map row of the rail's Discover panel shows and hides.
 //
 // | Unity test                    | Here                                                     | Class   |
 // | TestMinimapHudPresence        | the square map and the parcel the player stands on       | Partial |
@@ -16,7 +16,8 @@
 //   position is in (floor(x / 16), floor(z / 16)) is reported as a diagnostic, not asserted. The
 //   compass "N" is aria-hidden and cannot be addressed, so it is not checked.
 //
-// The minimap shows only while the rail's Map button is selected (it reads pressed then); the HUD
+// The minimap shows only while the Discover panel's Genesis City Map row is selected (it reads
+// pressed then, and the open panel covers the minimap while it is read); the HUD
 // remembers that choice and starts with the minimap hidden. The HUD also remembers whether the
 // widget is expanded per realm type and opens it collapsed in a World. So each scenario reads both
 // first, shows the minimap and expands it when it needs the map, and puts both back as it found
@@ -30,8 +31,11 @@ const scenario = spec(import.meta.url)
 const CONTROL_TIMEOUT_MS = 20_000
 const PARCEL_METERS = 16
 
-/** The rail button that shows and hides the minimap; pressed while it shows. */
-const MAP_BUTTON: Selector = { name: 'Map', role: 'button' }
+/** The rail button whose panel holds the minimap's row. */
+const DISCOVER: Selector = { name: 'Discover', role: 'button' }
+/** The Discover panel's row that shows and hides the minimap; pressed while the minimap is kept
+ *  shown. Picking it closes the panel. */
+const MAP_ROW: Selector = { name: 'Genesis City Map', role: 'button' }
 const COLLAPSE: Selector = { name: 'Collapse minimap', role: 'button' }
 const EXPAND: Selector = { name: 'Expand minimap', role: 'button' }
 const OPEN_MAP: Selector = { name: 'Open map', role: 'button' }
@@ -59,17 +63,19 @@ async function press(explorer: Explorer, selector: Selector): Promise<void> {
   await explorer.hud.click(selector)
 }
 
-/** Show or hide the minimap with the rail's Map button; answers whether it was shown before. */
+/** Show or hide the minimap with the Discover panel's Genesis City Map row; answers whether it
+ *  was shown before. The panel closes either way: picking the row closes it, and a second press of
+ *  Discover closes it when the row already reads as wanted. */
 async function setShown(explorer: Explorer, wanted: boolean): Promise<boolean> {
-  await explorer.hud.wait(MAP_BUTTON, { state: 'actionable', timeoutMs: CONTROL_TIMEOUT_MS })
-  const shown = (await explorer.hud.get(MAP_BUTTON)).checked === true
-  if (shown !== wanted) {
-    await explorer.hud.click(MAP_BUTTON)
-    await until(async () => (await explorer.hud.get(MAP_BUTTON)).checked === true, (now) => now === wanted, {
-      timeoutMs: CONTROL_TIMEOUT_MS,
-      what: `the rail's Map button to read ${wanted ? 'pressed' : 'not pressed'}`
-    })
-  }
+  await press(explorer, DISCOVER)
+  await explorer.hud.wait(MAP_ROW, { state: 'actionable', timeoutMs: CONTROL_TIMEOUT_MS })
+  const shown = (await explorer.hud.get(MAP_ROW)).checked === true
+  await explorer.hud.click(shown !== wanted ? MAP_ROW : DISCOVER)
+  // the widget shows exactly one of its chevrons while it is up
+  await until(async () => (await explorer.hud.isVisible(COLLAPSE)) || (await explorer.hud.isVisible(EXPAND)), (now) => now === wanted, {
+    timeoutMs: CONTROL_TIMEOUT_MS,
+    what: `the minimap to be ${wanted ? 'shown' : 'hidden'} after the Discover panel closed`
+  })
   return shown
 }
 

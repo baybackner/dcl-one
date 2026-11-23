@@ -1,8 +1,9 @@
 // The HUD's navigation column: loose 42px circles down the left edge. The top group holds the
-// "..." handle, Me, Map, Discover, Shop, System and the notifications bell; the bottom group holds
+// "..." handle, Me, Games, Discover, Shop, System and the notifications bell; the bottom group holds
 // the world tools (scene permissions, portable experiences, skybox), Volume, Emotes, Friends,
 // Camera, Nearby Voice and Chat. Me, Discover, Shop, System, Volume and Camera each open a panel
-// beside the column, one at a time; Map shows and hides the minimap.
+// beside the column, one at a time; Games opens Places on the game category, and Discover's
+// Genesis City Map row shows and hides the minimap.
 
 import { useCallback, useContext, useEffect, useState } from 'react'
 import { ControlButton, IconButton, MaskIcon, MenuList, MenuPanel, MenuRow, Panel, Slider, Toggle } from '../../design'
@@ -11,6 +12,7 @@ import { debugPanelLauncherEnabled } from '@explorer-core/lib/debugPanelLauncher
 import { keyHintFor, useBindingsSnapshot } from '../../lib/bindingLabels'
 import { userColor } from '@explorer-core/lib/identity'
 import { getPref, PREF, setPref } from '@explorer-core/lib/prefs'
+import { launchCount } from '@explorer-core/lib/launchCount'
 import type { EngineSession } from '../session/useEngineSession'
 import type { PassportTab } from '../profile/ProfilePassport'
 import { EDITOR_BUILD } from '@explorer-core/features/editorHost/config'
@@ -29,8 +31,7 @@ import { MapPanel } from './panels/MapPanel'
 import { DiscoverPanel } from './panels/DiscoverPanel'
 import { ShopPanel } from './panels/ShopPanel'
 import { SystemPanel } from './panels/SystemPanel'
-import mapArt from '../../assets/sidebar-rail/map.svg?no-inline'
-import mapOnArt from '../../assets/sidebar-rail/map-on.svg?no-inline'
+import gamesArt from '../../assets/sidebar-rail/games.svg?no-inline'
 import discoverArt from '../../assets/sidebar-rail/discover.svg?no-inline'
 import discoverOnArt from '../../assets/sidebar-rail/discover-on.svg?no-inline'
 import shopArt from '../../assets/sidebar-rail/shop.svg?no-inline'
@@ -91,12 +92,12 @@ function RasterButton({ src, size, ...props }: Omit<React.ComponentProps<typeof 
   )
 }
 
-// The Map button closes the open panel itself (toggleMap) and decides from what shows when pressed.
-const MAP_BUTTON = '[data-rail-map]'
+/** The category the Games button opens Places on (PlacesBrowser's CATEGORIES id). */
+const GAMES_CATEGORY = 'game'
 
 /** Places what a button opens beside the column, and closes it on an outside press or Cancel. */
 function PanelHost({ anchor, rise, onClose, children }: { anchor: HTMLElement; rise?: number; onClose: () => void; children: React.ReactNode }): React.JSX.Element {
-  const { ref, style } = useRailPopover(anchor, onClose, rise, MAP_BUTTON)
+  const { ref, style } = useRailPopover(anchor, onClose, rise)
   return (
     <div ref={ref} className={`${styles.panelHost} ${rise == null ? styles.centred : ''}`.trim()} style={style}>
       {children}
@@ -177,12 +178,25 @@ export function Sidebar({
   }
   // The minimap gives its place to a panel that opens over it, and to the notifications.
   const mapVisible = mapShown && !(panel != null && OVER_MAP.has(panel.id)) && !session.notifications.open
+  // Discover's Genesis City Map row: the open Discover panel always hides the minimap, so the row
+  // flips the kept choice, not what shows while it is pressed.
   const toggleMap = (): void => {
-    const next = !mapVisible
+    const next = !mapShown
     if (next) closeNotifications()
     setPanel(null)
     setMapShown(next)
     setPref(PREF.sidebarMap, next ? '1' : '0')
+  }
+  // Games draws attention through this device's first launch, until it is first pressed. The rail
+  // remounts after the Places page closes, and reads the kept "seen" again then.
+  const [gamesNew, setGamesNew] = useState(() => launchCount() === 1 && getPref(PREF.gamesSeen) !== '1')
+  const openGames = (): void => {
+    if (gamesNew) {
+      setGamesNew(false)
+      setPref(PREF.gamesSeen, '1')
+    }
+    setPanel(null)
+    session.places.openCategory(GAMES_CATEGORY)
   }
   // The popover closes once the engine lists no portable.
   const portablesShown = showPortables(session.portables.list)
@@ -251,7 +265,17 @@ export function Sidebar({
             quiet={isOpen('me')}
             onClick={togglePanel('me')}
           />
-          <IconButton icon="map" art={glyph(mapVisible ? mapOnArt : mapArt)} label="Map" active={mapVisible} quiet={mapVisible} onClick={toggleMap} data-rail-map="" />
+          {/* first launch: a pulsing ring (a static dot under reduced motion) until the first press */}
+          <IconButton
+            icon="places"
+            art={glyph(gamesArt)}
+            label="Games"
+            className={gamesNew ? styles.attention : undefined}
+            data-attention={gamesNew ? '' : undefined}
+            onClick={openGames}
+          >
+            {gamesNew && <span className={styles.newDot} aria-hidden="true" />}
+          </IconButton>
           <IconButton
             icon="places"
             art={glyph(isOpen('discover') ? discoverOnArt : discoverArt)}
@@ -409,6 +433,8 @@ export function Sidebar({
               onEvents={() => session.events.toggle('sidebar')}
               onPlaces={session.places.toggle}
               onCommunities={session.communities.toggle}
+              onMap={toggleMap}
+              mapShown={mapShown}
               onClose={closePanel}
             />
           )}

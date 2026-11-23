@@ -36,6 +36,23 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 beforeEach(clearPlacesCache)
 
 describe('places browser', () => {
+  it('opens on the category it is given: that chip pressed and the first query filtered by it', async () => {
+    servePlaces()
+    render(<PlacesBrowser initialCategory="game" onPick={vi.fn()} />)
+    const chips = within(screen.getByRole('group', { name: 'Categories' }))
+    expect(chips.getByRole('button', { name: 'game' })).toHaveAttribute('aria-pressed', 'true')
+    expect(chips.getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'false')
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled())
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url))
+    expect(urls.every((url) => url.includes('categories=game'))).toBe(true)
+  })
+
+  it('opens on all categories when none is given', () => {
+    servePlaces()
+    render(<PlacesBrowser onPick={vi.fn()} />)
+    expect(within(screen.getByRole('group', { name: 'Categories' })).getByRole('button', { name: 'all' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('shows the places a search finds when the worlds search is down', async () => {
     const fetchMock = vi.fn((url: string) =>
       url.includes('/worlds')

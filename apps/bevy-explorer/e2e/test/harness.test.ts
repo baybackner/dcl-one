@@ -13,8 +13,7 @@ const worldState = (keyboardClaimed: boolean | null) => JSON.stringify({ inWorld
 /** A HUD with `layers` modals over the rail, one closed per Escape, each listed as a dialog;
  *  `typing` keeps the chat input focused, or `chat` until the first Escape; `panel` names a rail
  *  panel, `menu` a rail button's list of rows (a dialog named as the button, the rail uncovered),
- *  and `popover` the rail's settings popover, open until the first Escape; `map` has the rail's
- *  Map button read pressed through every press; `claimed` has a
+ *  and `popover` the rail's settings popover, open until the first Escape; `claimed` has a
  *  field hold the keyboard until the first Escape (`always`: through every press), and `relay`
  *  more reads of `/world_state` after it; `sliding` has the rail read still moving that many
  *  times. */
@@ -26,7 +25,6 @@ function hud(
     empty?: boolean
     panel?: string
     menu?: string
-    map?: boolean
     popover?: boolean
     claimed?: boolean | 'always'
     relay?: number
@@ -50,13 +48,13 @@ function hud(
         return ++railReads <= (options.sliding ?? 0) ? button('Sidebar settings', false, false, 'still moving') : button('Sidebar settings', true)
       }
       const name = /"name":"([^"]+)"/.exec(line)?.[1] ?? ''
-      return button(name, true, (name === options.panel && escapes === 0) || (name === 'Map' && options.map === true))
+      return button(name, true, (name === options.panel && escapes === 0))
     },
     hud_list: () => {
       if (options.empty) return '[]'
       const modals = Array.from({ length: Math.max(0, layers - escapes) }, (_, i) => ({ role: 'dialog', name: `Modal ${i + 1}` }))
       const menu = options.menu != null && escapes === 0 ? [{ role: 'dialog', name: options.menu }] : []
-      return JSON.stringify([{ role: 'button', name: 'Close' }, ...(options.map ? [{ role: 'button', name: 'Map' }] : []), ...menu, ...modals])
+      return JSON.stringify([{ role: 'button', name: 'Close' }, ...menu, ...modals])
     },
     world_state: () => {
       if (options.claimed === 'always') return worldState(true)
@@ -116,12 +114,6 @@ describe('closeToRest', () => {
       assert.deepEqual(fake.sent('press_key'), ['/press_key Escape'])
     })
   }
-
-  test("the rail's Map button pressed is the minimap showing, which is a HUD at rest: no press", async () => {
-    const fake = hud(0, { map: true })
-    await closeToRest(new Explorer(fake), 300)
-    assert.deepEqual(fake.sent('press_key'), [])
-  })
 
   test("presses Escape for the rail's settings popover, which its button shows as expanded, not pressed", async () => {
     const fake = hud(0, { popover: true })

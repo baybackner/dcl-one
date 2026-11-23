@@ -531,7 +531,11 @@ export interface MinimapState {
 // Places browses the places API over HTTP (no bridge data) — it only needs open/close.
 export interface PlacesState {
   open: boolean
+  /** The category the page opens on: set by `openCategory`, cleared by `toggle`. */
+  category?: string
   toggle: () => void
+  /** Open the page (closing the other panels) with this category chip selected, e.g. 'game'. */
+  openCategory: (category: string) => void
   close: () => void
   /** One place read signed, with the player's own votes; null when the read failed. */
   readSigned: (id: string) => Promise<SignedPlace | null>
@@ -1662,6 +1666,7 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
   /** The scene (realm and hash) Donate's place was last taken from. */
   const donateSceneRef = useRef<string | null>(null)
   const [placesOpen, setPlacesOpen] = useState(false)
+  const [placesCategory, setPlacesCategory] = useState<string | undefined>(undefined)
   // The lobby reopened in-world: over the running world, under the panels it opens.
   const [lobbyOpen, setLobbyOpen] = useState(false)
   const [home, setHome] = useState<{ realm: string | null; parcel: string; pinned: boolean } | null>(null)
@@ -3237,7 +3242,18 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
   }, [])
   const toggleMap = useCallback(() => exclusive(setMapOpen, () => send('getMap')), [exclusive, send])
   // Places fetches its own HTTP data (no bridge), so opening needs no engine request.
-  const togglePlaces = useCallback(() => exclusive(setPlacesOpen), [exclusive])
+  // Every opening but openCategory's starts on 'all'.
+  const togglePlaces = useCallback(() => {
+    setPlacesCategory(undefined)
+    exclusive(setPlacesOpen)
+  }, [exclusive])
+  const openPlacesCategory = useCallback(
+    (category: string) => {
+      setPlacesCategory(category)
+      if (!placesOpen) exclusive(setPlacesOpen)
+    },
+    [exclusive, placesOpen]
+  )
   const closePlaces = useCallback(() => setPlacesOpen(false), [])
   const toggleEvents = useCallback(
     (source?: EventsOpenSource) => {
@@ -5330,7 +5346,7 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
     communities: { list: communities, browse: communityBrowse, loadBrowse: loadCommunityBrowse, loadMoreBrowse: loadMoreCommunityBrowse, open: communitiesOpen, toggle: toggleCommunities, create: createCommunity, update: updateCommunity, remove: deleteCommunity, deleted: deletedCommunity, save: communitySave, clearSave: clearCommunitySave, placeOptions: communityPlaceOptions, loadPlaceOptions: loadCommunityPlaceOptions, clearPlaceOptions: clearCommunityPlaceOptions, removePlace: removeCommunityPlace, memberAction: communityMemberAction, join: joinCommunity, requestToJoin: requestToJoinCommunity, cancelRequest: cancelJoinRequest, leave: leaveCommunity, error: communityError, detail: communityDetail, loadDetail: loadCommunityDetail, cards: communityCards, fetch: fetchCommunity, invites: communityInvites, loadInvites: loadCommunityInvites, pendingCount, loadInvitesCount: loadCommunityInvitesCount, manageRequest: manageCommunityRequest, memberSections, cardOpen: setOpenCard, loadMemberSection, invitable, loadInvitable, invite: inviteToCommunity, unban: unbanCommunityMember, posts: communityPosts, loadPosts: loadCommunityPosts, loadMorePosts: loadMoreCommunityPosts, createPost: createCommunityPost, deletePost: deleteCommunityPost, likePost: likeCommunityPost },
     map: mapSlice,
     minimap: minimapSlice,
-    places: { open: placesOpen, toggle: togglePlaces, close: closePlaces, readSigned: readSignedPlace, worldAccess },
+    places: { open: placesOpen, category: placesCategory, toggle: togglePlaces, openCategory: openPlacesCategory, close: closePlaces, readSigned: readSignedPlace, worldAccess },
     events: { open: eventsOpen, toggle: toggleEvents, close: closeEvents, data: eventsData, memberOf: eventCommunities },
     shop: { open: shopOpen, toggle: toggleShop },
     create: { open: createOpen, toggle: toggleCreate, show: showCreate },
