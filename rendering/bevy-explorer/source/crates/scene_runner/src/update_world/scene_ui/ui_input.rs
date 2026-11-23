@@ -69,7 +69,7 @@ pub fn set_ui_input(
         let font_size = input.0.font_size.unwrap_or(10).max(1) as f32;
         let multiline = input.0.multi_line.unwrap_or(false);
         // an input's text defaults to middle-left (a label's to middle-center)
-        let align_self = match input
+        let vertical_align = match input
             .0
             .text_align
             .map(|_| input.0.text_align())
@@ -77,13 +77,13 @@ pub fn set_ui_input(
         {
             TextAlignMode::TamTopLeft
             | TextAlignMode::TamTopCenter
-            | TextAlignMode::TamTopRight => AlignSelf::FlexStart,
+            | TextAlignMode::TamTopRight => JustifyContent::FlexStart,
             TextAlignMode::TamMiddleLeft
             | TextAlignMode::TamMiddleCenter
-            | TextAlignMode::TamMiddleRight => AlignSelf::Center,
+            | TextAlignMode::TamMiddleRight => JustifyContent::Center,
             TextAlignMode::TamBottomLeft
             | TextAlignMode::TamBottomCenter
-            | TextAlignMode::TamBottomRight => AlignSelf::FlexEnd,
+            | TextAlignMode::TamBottomRight => JustifyContent::FlexEnd,
         };
         let clear_on_submit = input.0.clear_on_submit.unwrap_or(true);
 
@@ -151,7 +151,7 @@ pub fn set_ui_input(
                 multiline: if multiline { 2 } else { 1 },
                 // keep the text off the box's edges
                 padding: UiRect::horizontal(Val::Px(INPUT_TEXT_INSET)),
-                align_self: Some(align_self),
+                vertical_align: Some(vertical_align),
                 text_style: Some((
                     TextFont {
                         font: scene_fonts.face(&family, ui_core::WeightName::Regular),

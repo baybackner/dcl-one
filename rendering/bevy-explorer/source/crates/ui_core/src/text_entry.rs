@@ -33,9 +33,8 @@ pub struct TextEntry {
     pub retain_focus_on_submit: bool,
     /// Space between the entry's box and its text.
     pub padding: UiRect,
-    /// Where a single-line entry sits on its box's cross axis. `None` fills the box, with the
-    /// text at the top.
-    pub align_self: Option<AlignSelf>,
+    /// Where a single-line entry's text sits vertically in its box. `None` keeps it at the top.
+    pub vertical_align: Option<JustifyContent>,
 }
 
 impl Default for TextEntry {
@@ -50,7 +49,7 @@ impl Default for TextEntry {
             multiline: 1,
             retain_focus_on_submit: false,
             padding: UiRect::ZERO,
-            align_self: None,
+            vertical_align: None,
         }
     }
 }
@@ -127,18 +126,20 @@ fn update_text_entry_components(
             .map(|tev| &tev.0)
             .unwrap_or_else(|| &textbox.content);
 
-        // a single-line entry with an alignment takes its text's height and sits where asked
-        let aligned = textbox.multiline <= 1 && textbox.align_self.is_some();
+        // a single-line entry places its text vertically as asked; its box keeps the full
+        // height whatever the parent's flex direction
+        let vertical_align = textbox.vertical_align.filter(|_| textbox.multiline <= 1);
         cmds.try_insert((
             Node {
                 width: Val::Percent(100.0),
                 min_width: Val::Percent(100.0),
-                height: if aligned {
-                    Val::Auto
+                height: Val::Percent(100.0),
+                flex_direction: if vertical_align.is_some() {
+                    FlexDirection::Column
                 } else {
-                    Val::Percent(100.0)
+                    FlexDirection::default()
                 },
-                align_self: textbox.align_self.filter(|_| aligned).unwrap_or_default(),
+                justify_content: vertical_align.unwrap_or_default(),
                 padding: textbox.padding,
                 ..Default::default()
             },
