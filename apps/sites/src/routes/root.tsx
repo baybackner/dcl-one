@@ -31,6 +31,7 @@ import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
 import { ThumbnailPublicBase } from "@dcl/one-ui/components/AppChrome/thumbnail-public-base";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
 import { pageSid, parseCookies, publicResponseContext, sessionMiddleware } from "@/core/lib/telemetry/session";
+import { useNotFoundPageView, useRoutePageView } from "@/core/lib/telemetry/page-view";
 import { SitesLocaleContext, sitesLanguage, type SitesLocale, type SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { readWallet } from "@/data/lib/auth/wallet-cookie";
 import { browserCatalystBase } from "@/data/lib/catalyst/bases";
@@ -313,6 +314,7 @@ export default function App() {
   // (ui3/src/data/hooks); one client per request on the server, one per page
   // in the browser, so SSR never shares a cache between visitors.
   const [queryClient] = useState(() => new QueryClient(QUERY_CLIENT_CONFIG));
+  useRoutePageView();
   useEffect(() => {
     appHydrated = true;
     document.documentElement.removeAttribute("data-nav-loading");
@@ -337,6 +339,7 @@ export default function App() {
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isRouteError = isRouteErrorResponse(error);
   const routeStatus = isRouteError ? error.status : 0;
+  useNotFoundPageView(routeStatus === 404);
 
   let name = "Error";
   let message = "An unexpected error occurred.";

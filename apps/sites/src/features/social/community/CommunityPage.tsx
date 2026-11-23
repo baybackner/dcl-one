@@ -6,6 +6,7 @@ import SitesLayout from "../../components/chrome/SitesLayout";
 import { Button, Skeleton, Spinner, Tabs, TabsBar } from "@dcl/one-ui";
 import { GeneralCheck, GeneralLock, GeneralPlayers, GeneralPrivate, GeneralPublic } from "@dcl/one-ui/foundations/icons";
 
+import { usePageView } from "@/core/lib/telemetry/page-view";
 import { useAuth } from "@/data/lib/auth/context";
 import { shortAddress } from "@/data/lib/catalyst/format/address";
 import type { CommunityInfo } from "@/data/lib/catalyst/social/community-detail";
@@ -17,6 +18,7 @@ import { CommunityEvents } from "./CommunityEvents";
 import { CommunityMembers } from "./CommunityMembers";
 import styles from "./CommunityPage.module.css";
 import { isRouteFatal } from "./errors";
+import { communityPageView } from "./page-view";
 import { useCommunityMembership, type Membership } from "./useCommunityMembership";
 import { canViewContent, faceUrl, membersLabel, thumbnailUrl } from "./view";
 
@@ -39,6 +41,7 @@ export function CommunityPage({ id, now }: { id: string; now: number }) {
     // Only a first load without data reaches the route's boundary; a failed refetch keeps the page.
     throwOnError: (error, query) => query.state.data === undefined && isRouteFatal(error),
   });
+  usePageView(communityPageView(community));
   return (
     <SitesLayout active="play" overlayNav>
       <div className={styles.root}>
