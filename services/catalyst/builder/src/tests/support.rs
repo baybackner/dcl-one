@@ -114,7 +114,7 @@ pub async fn save_collection(
     let provider = request.urn.as_deref().and_then(save::third_party_urn);
     let deployment = match provider {
         Some(_) => None,
-        None => Some(save::standard_deployment(&request, signer)?),
+        None => Some(save::standard_deployment(&store.network, &request, signer)?),
     };
     let id = Uuid::parse_str(&request.id).unwrap();
     store
@@ -762,12 +762,10 @@ alloy_sol_types::sol! {
     function getRarityByName(string rarity) external view returns (OracleRarity);
 }
 
-/// The Polygon rarities-with-oracle contract.
-pub const RARITIES_WITH_ORACLE: &str = "0xa9158e22f89bb3f69c5600338895cb5fb81e5090";
-
-/// A loopback Polygon JSON-RPC that answers `eth_call`s of
-/// `getRarityByName` on [`RARITIES_WITH_ORACLE`] with the MANA price it
-/// holds for the name (an unknown name reverts, `None` answers HTTP 502),
+/// A loopback JSON-RPC of a Polygon chain (mainnet unless [`FakeOracle::on`])
+/// that answers its chain id and `eth_call`s of `getRarityByName` on that
+/// chain's rarities-with-oracle contract with the MANA price it holds for
+/// the name (an unknown name reverts, `None` answers HTTP 502),
 /// and records the names it was asked.
 #[derive(Clone, Default)]
 pub struct FakeOracle {
@@ -778,6 +776,7 @@ pub struct FakeOracle {
     down: Arc<std::sync::atomic::AtomicBool>,
     other_chain: Arc<std::sync::atomic::AtomicBool>,
     rarity_calls: Arc<RarityCalls>,
+    network: crate::network::Network,
 }
 
 #[derive(Default)]
@@ -836,6 +835,12 @@ impl FakeOracle {
         self.down.store(down, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// The fake of `network`'s chain, its chain id and oracle.
+    pub fn on(mut self, network: crate::network::Network) -> Self {
+        self.network = network;
+        self
+    }
+
     /// Answers another network's chain id (Ethereum's) while `other`.
     pub fn set_other_chain(&self, other: bool) {
         self.other_chain
@@ -865,9 +870,9 @@ impl FakeOracle {
         match body["method"].as_str().unwrap_or_default() {
             "eth_chainId" => {
                 let chain = if fake.other_chain.load(std::sync::atomic::Ordering::SeqCst) {
-                    "0x1"
+                    "0x1".to_string()
                 } else {
-                    "0x89"
+                    format!("{:#x}", fake.network.chain_id)
                 };
                 return axum::Json(
                     serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": chain }),
@@ -913,7 +918,7 @@ impl FakeOracle {
             Some(asked)
                 if body["method"] == "eth_call"
                     && call["to"].as_str().map(str::to_ascii_lowercase).as_deref()
-                        == Some(RARITIES_WITH_ORACLE) =>
+                        == Some(fake.network.rarities_with_oracle) =>
             {
                 use std::sync::atomic::Ordering::SeqCst;
                 let calls = &fake.rarity_calls;

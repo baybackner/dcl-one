@@ -1,10 +1,9 @@
 //! `GET /v1/rarities` and `GET /v1/rarities/:name`: the rarities the Polygon
 //! collections subgraph lists (`id`, `name`, the USD `price`, `maxSupply`),
-//! each with its MANA price from the rarities-with-oracle contract
-//! ([`RARITIES_WITH_ORACLE`], `getRarityByName` over
-//! `BUILDER_POLYGON_RPC_URL`), as builder-server answers them. The contract
-//! is Polygon mainnet's, as every chain fact the builder reads is; an RPC of
-//! another network can't tell.
+//! each with its MANA price from the node's Polygon chain's
+//! rarities-with-oracle contract ([`crate::network`], `getRarityByName` over
+//! `BUILDER_POLYGON_RPC_URL`), as builder-server answers them. An RPC that
+//! answers another chain can't tell.
 //!
 //! The subgraph goes through the shared client
 //! (`chain_index::graph::graph_query`); the oracle is asked once per listed
@@ -29,11 +28,10 @@ use crate::chain_index::ChainIndex;
 use crate::chain_index::graph::graph_query;
 use crate::http::ApiError;
 use crate::kept::{FETCH_TIMEOUT, Kept};
+use crate::network::Network;
 
 /// How long a good read answers.
 pub const RARITIES_TTL: Duration = Duration::from_secs(60);
-/// The Polygon rarities-with-oracle contract.
-pub const RARITIES_WITH_ORACLE: &str = "0xa9158e22f89bb3f69c5600338895cb5fb81e5090";
 /// The most rarities a read accepts: The Graph's default page.
 pub const MAX_RARITIES: usize = 100;
 const NAME_MAX: usize = 64;
@@ -90,6 +88,7 @@ impl Rarities {
                 fetch(
                     state.market.clone(),
                     state.http.clone(),
+                    state.settings.network,
                     state.settings.polygon_rpc_url.clone(),
                 )
             })
@@ -115,9 +114,11 @@ impl Rarities {
 async fn fetch(
     market: Option<Arc<ChainIndex>>,
     http: Outbound,
+    network: Network,
     rpc: Option<String>,
 ) -> Option<RarityList> {
-    let error = match tokio::time::timeout(FETCH_TIMEOUT, read(market, &http, rpc)).await {
+    let error = match tokio::time::timeout(FETCH_TIMEOUT, read(market, &http, &network, rpc)).await
+    {
         Ok(Ok(rarities)) => return Some(Arc::new(rarities)),
         Ok(Err(error)) => error,
         Err(_) => "timed out".to_string(),
@@ -136,6 +137,7 @@ fn amount(value: &Value) -> Option<String> {
 async fn read(
     market: Option<Arc<ChainIndex>>,
     http: &Outbound,
+    network: &Network,
     rpc: Option<String>,
 ) -> Result<Vec<Rarity>, String> {
     let market = market.ok_or("no chain index")?;
@@ -154,6 +156,13 @@ async fn read(
         return Err(format!("subgraph answered {} rarities", listed.len()));
     }
     let rpc = Rpc::new(http, &rpc).with_timeout(FETCH_TIMEOUT);
+    let chain = rpc
+        .call_hex("eth_chainId", json!([]))
+        .await
+        .map_err(|e| format!("chain id: {e}"))?;
+    if !network.answers(&chain) {
+        return Err(network.other_chain(&chain));
+    }
     let mut rows = Vec::with_capacity(listed.len());
     for row in listed {
         let text = |key: &str| {
@@ -181,7 +190,7 @@ async fn read(
             let answer = rpc
                 .call_hex(
                     "eth_call",
-                    json!([{ "to": RARITIES_WITH_ORACLE, "data": hex::encode_prefixed(call.abi_encode()) }, "latest"]),
+                    json!([{ "to": network.rarities_with_oracle, "data": hex::encode_prefixed(call.abi_encode()) }, "latest"]),
                 )
                 .await
                 .map_err(|e| format!("oracle read of {name}: {e}"))?;

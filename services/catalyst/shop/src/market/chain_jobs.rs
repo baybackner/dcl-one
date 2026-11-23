@@ -1486,10 +1486,11 @@ pub fn projections(
         );
     }
     if settings.committee_enabled {
+        let chain_id = settings.chain_id(net);
         add(
             "committee-index",
             state.committee_rpc_url(net),
-            Arc::new(|| Arc::new(super::committee_index::CommitteeIndex)),
+            Arc::new(move || Arc::new(super::committee_index::CommitteeIndex { chain_id })),
             None,
             market_cfg(),
         );
@@ -1660,7 +1661,7 @@ fn log_switches(state: &Arc<MarketplaceState>, rentals: Option<bool>) {
     } else if state.committee_rpc_url(ChainNet::Matic).is_none() {
         tracing::warn!(
             job = "committee-index",
-            "committee index enabled but no Polygon JSON-RPC endpoint is configured (TRADE_RPC_URLS 137=, or RPC_ENDPOINT_POLYGON on mainnet): it stays off"
+            "committee index enabled but no Polygon JSON-RPC endpoint is configured (the TRADE_RPC_URLS entry of MARKETPLACE_INDEX_CHAIN_ID_MATIC, or RPC_ENDPOINT_POLYGON for 137 on mainnet): it stays off"
         );
     }
     if rentals == Some(false) {

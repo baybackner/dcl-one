@@ -287,7 +287,7 @@ pub async fn publish(
             .fetch_all(&mut *tx)
             .await?;
         let view = chain_state::for_decision(&mut tx).await?;
-        access::confirm_collection_sync(&mut tx, &view, sync).await?;
+        access::confirm_collection_sync(&mut tx, &view, &state.settings.network, sync).await?;
         let now = snapshot(&mut tx, id).await?;
         let same_items = now
             .items
@@ -311,7 +311,7 @@ pub async fn publish(
              FROM unnest($1::uuid[]) WITH ORDINALITY AS p(id, place) WHERE i.id = p.id",
         )
         .bind(&items)
-        .bind(format!("urn:decentraland:matic:collections-v2:{contract}:"))
+        .bind(state.settings.network.item_urn(&contract, ""))
         .execute(&mut *tx)
         .await?;
         if first && !now.approved {

@@ -156,11 +156,6 @@
       ],
       "anchors": []
     },
-    "polygon-mainnet-collections": {
-      "text": "GET and PUT /v1/collections/:id and both listings: the node computes a standard collection's address with the Polygon mainnet collection factory and answers urn:decentraland:matic: collection URNs. Upstream deployed against a test network (CHAIN_NAME Sepolia) uses the Amoy factory and amoy URNs.",
-      "captures": [],
-      "anchors": []
-    },
     "stored-name-trimmed": {
       "text": "PUT /v1/collections/:id and PUT /v1/items/:idOrURN: the node stores and answers a collection's or an item's name trimmed of surrounding spaces; upstream stores it as sent and answers it so, also in a refusal's data.",
       "captures": [
@@ -2216,7 +2211,6 @@
         "deliberate:chain-copy-lag",
         "deliberate:committee-unavailable",
         "deliberate:managers-from-chain-only",
-        "deliberate:polygon-mainnet-collections",
         "deliberate:review-running-is-an-open-request",
         "deliberate:listing-page-past-the-last",
         "deliberate:published-filter-splits",
@@ -2492,6 +2486,11 @@
           "path": "services/catalyst/builder/src/kept.rs",
           "test": "a_write_decision_just_after_a_read_takes_a_read_of_its_own",
           "scope": "A write decision right after a read decision takes a read that started after it."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "an_amoy_node_saves_publishes_and_names_its_collections_on_amoy",
+          "scope": "On an Amoy node the address listing answers amoy collection URNs."
         }
       ],
       "gaps": [
@@ -2501,7 +2500,6 @@
         "deliberate:chain-copy-lag",
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
-        "deliberate:polygon-mainnet-collections",
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:query-never-overrides",
@@ -2922,6 +2920,11 @@
           "path": "services/catalyst/builder/src/tests/third_party_matrix.rs",
           "test": "a_manager_the_registry_stops_listing_is_refused_its_next_write_and_its_reads_past_the_window",
           "scope": "A manager the registry stops listing is refused its next publish at once and its reads once the window has passed."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "an_amoy_node_saves_publishes_and_names_its_collections_on_amoy",
+          "scope": "On an Amoy node a collection answers urn:decentraland:amoy: URNs, and its published items the amoy URN."
         }
       ],
       "gaps": [
@@ -2930,7 +2933,6 @@
         "deliberate:admin-addresses-not-admitted",
         "deliberate:committee-unavailable",
         "deliberate:chain-copy-lag",
-        "deliberate:polygon-mainnet-collections",
         "deliberate:timestamped-signatures-only",
         "deliberate:signature-window",
         "deliberate:unauthenticated-message",
@@ -3865,6 +3867,16 @@
           "path": "services/catalyst/builder/src/collections/save.rs",
           "test": "a_standard_save_needs_initialize_data_naming_the_signer",
           "scope": "An empty data answers 200 ok:false 'Could not get data from request' as a missing one does, as upstream."
+        },
+        {
+          "path": "services/catalyst/builder/src/tests/lifecycle.rs",
+          "test": "an_amoy_node_saves_publishes_and_names_its_collections_on_amoy",
+          "scope": "On a node whose ETH_NETWORK is sepolia a save stores the Amoy factory's CREATE2 address and answers an amoy URN, as upstream with CHAIN_NAME Sepolia."
+        },
+        {
+          "path": "services/catalyst/builder/src/collections/contract.rs",
+          "test": "an_amoy_address_is_builder_servers_on_sepolia",
+          "scope": "The Amoy address equals the one upstream's FactoryCollection computes with CHAIN_NAME Sepolia."
         }
       ],
       "gaps": [
@@ -3874,7 +3886,6 @@
         "deliberate:owner-is-the-chain-creator",
         "deliberate:managers-from-chain-only",
         "deliberate:access-before-kind-conflict",
-        "deliberate:polygon-mainnet-collections",
         "deliberate:timestamped-signatures-only",
         "deliberate:unauthenticated-message",
         "deliberate:chain-copy-lag",

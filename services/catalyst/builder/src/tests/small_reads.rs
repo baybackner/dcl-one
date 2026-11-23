@@ -46,6 +46,14 @@ fn app_over(state: crate::SharedState) -> Router {
 }
 
 async fn rarities_app(subgraph: &FakeCommittee, oracle: Option<&FakeOracle>) -> Router {
+    rarities_app_on(subgraph, oracle, crate::network::POLYGON).await
+}
+
+async fn rarities_app_on(
+    subgraph: &FakeCommittee,
+    oracle: Option<&FakeOracle>,
+    network: crate::network::Network,
+) -> Router {
     let rpc = match oracle {
         Some(oracle) => Some(oracle.url().await),
         None => None,
@@ -61,6 +69,7 @@ async fn rarities_app(subgraph: &FakeCommittee, oracle: Option<&FakeOracle>) -> 
             Some(committee_index(subgraph).await),
             None,
             crate::Settings {
+                network,
                 polygon_rpc_url: rpc,
                 ..crate::Settings::default()
             },
@@ -133,6 +142,48 @@ async fn rarities_merge_the_subgraph_with_the_oracle_and_are_kept() {
         2,
         "the listed rarities are asked at once"
     );
+}
+
+/// The `/create` app checks the quoted fee against its own chain's oracle:
+/// an Amoy node quotes Amoy's, and only over an RPC that answers Amoy.
+#[tokio::test]
+async fn an_amoy_node_quotes_amoys_oracle_and_no_other_chains() {
+    use crate::network::{AMOY, POLYGON};
+    let listed = || {
+        let subgraph = FakeCommittee::with(&[]);
+        subgraph.set_rarities(Some(&[("common", USD, "100000")]));
+        subgraph
+    };
+    let amoy = FakeOracle::with(&[("common", "7")]).on(AMOY);
+    let app = rarities_app_on(&listed(), Some(&amoy), AMOY).await;
+    let (status, _, body) = get(&app, "/v1/rarities/common").await;
+    assert_eq!(
+        (status, body),
+        (
+            StatusCode::OK,
+            json!({ "ok": true, "data": rarity("common", "100000", "7") })
+        )
+    );
+    let mainnet = FakeOracle::with(&[("common", "7")]);
+    let other_chain = FakeOracle::with(&[("common", "7")]).on(AMOY);
+    other_chain.set_other_chain(true);
+    for (case, app) in [
+        (
+            "a Polygon mainnet RPC on an Amoy node",
+            rarities_app_on(&listed(), Some(&mainnet), AMOY).await,
+        ),
+        (
+            "an Amoy RPC on a mainnet node",
+            rarities_app_on(&listed(), Some(&amoy), POLYGON).await,
+        ),
+        (
+            "an RPC holding Amoy's oracle that answers another chain",
+            rarities_app_on(&listed(), Some(&other_chain), AMOY).await,
+        ),
+    ] {
+        let (status, _, _) = get(&app, "/v1/rarities/common").await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}");
+    }
 }
 
 #[tokio::test]

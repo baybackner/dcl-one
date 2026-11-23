@@ -1,5 +1,6 @@
-//! Whether a standard collection's contract is on Polygon, asked of
-//! `BUILDER_POLYGON_RPC_URL` at the address the collection's row holds:
+//! Whether a standard collection's contract is on the node's Polygon chain
+//! ([`crate::network`]), asked of `BUILDER_POLYGON_RPC_URL` once it answers
+//! that chain, at the address the collection's row holds:
 //! `eth_getCode` there and the contract's `itemsCount()`, both at the
 //! `finalized` block. The address is the CREATE2 address of the collection
 //! factory for the collection's salt and its `initialize` calldata
@@ -15,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use alloy_primitives::{U256, hex};
+use alloy_primitives::hex;
 use alloy_sol_types::SolCall;
 use dcl_http::Outbound;
 use dcl_http::jsonrpc::Rpc;
@@ -23,6 +24,7 @@ use serde_json::json;
 
 use crate::State;
 use crate::kept::{FETCH_TIMEOUT, Kept};
+use crate::network::Network;
 use crate::publication_chain::itemsCountCall;
 
 /// How long an answer is kept.
@@ -35,7 +37,7 @@ pub const KEPT_CONTRACTS: usize = 4096;
 pub enum Onchain {
     /// No Polygon RPC is configured.
     Unconfigured,
-    /// The RPC failed or answered something else than Polygon's facts.
+    /// The RPC failed or answered another chain's facts.
     Unknown,
     /// No code at the address.
     Absent,
@@ -65,9 +67,9 @@ impl Deployments {
                 .or_insert_with(|| Arc::new(Kept::new(DEPLOYMENT_TTL)))
                 .clone()
         };
-        let http = state.http.clone();
+        let (http, network) = (state.http.clone(), state.settings.network);
         match kept
-            .get(|| fetch(http.clone(), url.clone(), contract.clone()))
+            .get(|| fetch(http.clone(), network, url.clone(), contract.clone()))
             .await
         {
             None => Onchain::Unknown,
@@ -77,24 +79,35 @@ impl Deployments {
     }
 }
 
-async fn fetch(http: Outbound, url: String, contract: String) -> Option<Option<u64>> {
-    let error = match tokio::time::timeout(FETCH_TIMEOUT, read(&http, &url, &contract)).await {
-        Ok(Ok(answer)) => return Some(answer),
-        Ok(Err(error)) => error,
-        Err(_) => "timed out".to_string(),
-    };
+async fn fetch(
+    http: Outbound,
+    network: Network,
+    url: String,
+    contract: String,
+) -> Option<Option<u64>> {
+    let error =
+        match tokio::time::timeout(FETCH_TIMEOUT, read(&http, &network, &url, &contract)).await {
+            Ok(Ok(answer)) => return Some(answer),
+            Ok(Err(error)) => error,
+            Err(_) => "timed out".to_string(),
+        };
     tracing::warn!(error = %error, contract = %contract, "builder deployment read failed");
     None
 }
 
-async fn read(http: &Outbound, url: &str, contract: &str) -> Result<Option<u64>, String> {
+async fn read(
+    http: &Outbound,
+    network: &Network,
+    url: &str,
+    contract: &str,
+) -> Result<Option<u64>, String> {
     let rpc = Rpc::new(http, url).with_timeout(FETCH_TIMEOUT);
     let chain = rpc
         .call_hex("eth_chainId", json!([]))
         .await
         .map_err(|e| format!("chain id: {e}"))?;
-    if U256::from_str_radix(chain.trim_start_matches("0x"), 16).ok() != Some(U256::from(137)) {
-        return Err(format!("the RPC answers chain {chain}, not Polygon"));
+    if !network.answers(&chain) {
+        return Err(network.other_chain(&chain));
     }
     let code = rpc
         .call_hex("eth_getCode", json!([contract, "finalized"]))

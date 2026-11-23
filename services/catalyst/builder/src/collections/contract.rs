@@ -1,4 +1,5 @@
-//! The address a standard collection will have on Polygon, computed the way
+//! The address a standard collection will have on the node's Polygon chain
+//! ([`crate::network`]), computed the way
 //! builder-server's `FactoryCollection` computes it: the salt is the
 //! keccak-256 of the collection id, and the address is the collection
 //! factory's CREATE2 of the keccak-256 of the salt, the forwarder and the
@@ -9,11 +10,7 @@
 use alloy_primitives::{Address, B256, keccak256};
 use alloy_sol_types::{SolCall, sol};
 
-use crate::publication::{COLLECTION_FACTORY, COLLECTION_FORWARDER};
-
-/// The keccak-256 of the collection factory's proxy init code on Polygon.
-pub const FACTORY_CODE_HASH: &str =
-    "0x5a1d707e8f0be7be88213a8216231468689b96dcd4abed0931276f4886a87beb";
+use crate::network::Network;
 
 sol! {
     struct InitializeItem { string rarity; uint256 price; address beneficiary; string metadata; }
@@ -25,11 +22,11 @@ pub fn salt(id: &str) -> B256 {
     keccak256(id.as_bytes())
 }
 
-/// `FactoryCollection.getContractAddress(salt, data)`, lowercase.
-pub fn address(salt: B256, data: &[u8]) -> String {
-    let factory: Address = COLLECTION_FACTORY.parse().unwrap_or_default();
-    let forwarder: Address = COLLECTION_FORWARDER.parse().unwrap_or_default();
-    let code_hash: B256 = FACTORY_CODE_HASH.parse().unwrap_or_default();
+/// `FactoryCollection.getContractAddress(salt, data)` on `network`, lowercase.
+pub fn address(network: &Network, salt: B256, data: &[u8]) -> String {
+    let factory: Address = network.collection_factory.parse().unwrap_or_default();
+    let forwarder: Address = network.forwarder.parse().unwrap_or_default();
+    let code_hash: B256 = network.factory_code_hash.parse().unwrap_or_default();
     let inner = keccak256([salt.as_slice(), forwarder.as_slice(), data].concat());
     let outer = keccak256(
         [
@@ -88,8 +85,17 @@ mod tests {
             "0xda8033e38e37a4cf3bd9f0a4d697db91d8f1c927fadb3220a8cc71bc2a539eb8"
         );
         assert_eq!(
-            address(salt, &[0]),
+            address(&crate::network::POLYGON, salt, &[0]),
             "0x969194d18107025936324ddc6b1019a6755c94d5"
+        );
+    }
+
+    #[test]
+    fn an_amoy_address_is_builder_servers_on_sepolia() {
+        let salt = salt("c011ec71-0000-4000-8000-000000000002");
+        assert_eq!(
+            address(&crate::network::AMOY, salt, &[0]),
+            "0x86a35a7cdd15247d1ce8e4d145fc7ebdafada724"
         );
     }
 
@@ -136,7 +142,11 @@ mod tests {
         let data = "0xd14fee77000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000180000000000000000000000000c1aba94a79ca07d9d15a62ff5c9b382777e0c70e0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000017113b44fdd661a156cc01b5031e3acf72c32eb30000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000b566563746f722068617473000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000b44434c2d56435452485453000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004668747470733a2f2f706565722e646563656e7472616c616e642e6f72672f6c616d626461732f636f6c6c656374696f6e732f7374616e646172642f6572633732312f3133372f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000de0b6b3a7640000000000000000000000000000c1aba94a79ca07d9d15a62ff5c9b382777e0c70e00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000006636f6d6d6f6e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001c313a773a566563746f72206861743a3a6861743a426173654d616c6500000000";
         let bytes = initialize_for(data, OWNER).expect("the owner's calldata");
         assert_eq!(
-            address(salt("c011ec71-0000-4000-8000-0000000000f1"), &bytes),
+            address(
+                &crate::network::POLYGON,
+                salt("c011ec71-0000-4000-8000-0000000000f1"),
+                &bytes
+            ),
             "0xe237c5ffa36d5432a8cfdf53960bcf61ce4cdfc5"
         );
         assert!(initialize_for(data, "0xcd6884d4258edc833f31ac773e24affe6a7d3154").is_none());

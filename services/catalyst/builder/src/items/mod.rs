@@ -45,6 +45,8 @@ pub struct ItemsComponent {
     pub(crate) denylist: Arc<crate::content::Denylist>,
     /// What one wallet's drafts may hold.
     pub documents: crate::limits::Documents,
+    /// The Polygon chain its URNs name ([`crate::network`]).
+    pub(crate) network: crate::network::Network,
     released: AtomicBool,
 }
 
@@ -63,8 +65,15 @@ impl ItemsComponent {
             blobs,
             denylist: Arc::default(),
             documents: crate::limits::Documents::default(),
+            network: crate::network::Network::default(),
             released: AtomicBool::new(false),
         }
+    }
+
+    /// The store whose URNs name `network`'s chain.
+    pub fn with_network(mut self, network: crate::network::Network) -> Self {
+        self.network = network;
+        self
     }
 
     /// The store whose item bodies forget a catalyst entity `denylist` withholds.

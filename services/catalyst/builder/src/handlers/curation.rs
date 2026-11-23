@@ -68,7 +68,12 @@ pub async fn get_curation_collections(
     State(state): State<SharedState>,
     _: Admin,
 ) -> Result<Json<ApiData<CurationCollectionsOut>>, ApiError> {
-    let committee = match crate::committee::current_members(state.items.pool()).await {
+    let committee = match crate::committee::current_members(
+        state.items.pool(),
+        &state.settings.network,
+    )
+    .await
+    {
         Ok(members) => members
             .unwrap_or_default()
             .into_iter()

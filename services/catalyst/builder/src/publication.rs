@@ -1,8 +1,9 @@
 //! Standard collection publication, the preparation half: the frozen
 //! snapshot of a collection and its items (`SNAPSHOT_QUERY`, items in
 //! creation order) validated and turned into the Polygon collection-manager
-//! parameters the client's wallet signs (`PublicationPreparation`: chain 137,
-//! the manager, factory and forwarder contracts, a stable salt, the symbol
+//! parameters the client's wallet signs (`PublicationPreparation`: the
+//! node's Polygon chain ([`crate::network`]) with its manager, factory and
+//! forwarder contracts and base URI, a stable salt, the symbol
 //! and each item's on-chain metadata string). The `revision` is the CIDv1 of
 //! the snapshot text, so any edit invalidates a review. Nothing here writes
 //! or signs: `publication_store` records the attempt, `publication_chain`
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::access::Publisher;
+use crate::network::Network;
 
 use dcl_auth::hash_bytes_v1;
 
@@ -21,12 +23,6 @@ use super::chain_state;
 use super::drafts::ItemDraft;
 use super::http::ApiError;
 use super::items::ItemsComponent;
-
-pub const COLLECTION_MANAGER: &str = "0x9d32aac179153a991e832550d9f96441ea27763a";
-pub const COLLECTION_FACTORY: &str = "0x3195e88ae10704b359764cb38e429d24f1c2f781";
-pub const COLLECTION_FORWARDER: &str = "0xbf6755a83c0dcdbb2933a96ea778e00b717d7004";
-pub const COLLECTION_BASE_URI: &str =
-    "https://peer.decentraland.org/lambdas/collections/standard/erc721/";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export, export_to = "builder/"))]
@@ -76,7 +72,7 @@ impl ItemsComponent {
             .await?
             .ok_or_else(|| ApiError::not_found("Collection not found"))?;
         mark_missing_bytes(&self.blobs, &mut snapshot).await?;
-        prepare(snapshot, signer)
+        prepare(snapshot, signer, &self.network)
     }
 }
 
@@ -154,7 +150,11 @@ fn already_published() -> ApiError {
     ApiError::bad_request("Collection has already been published")
 }
 
-pub(super) fn prepare(snapshot: Value, signer: &str) -> Result<PublicationPreparation, ApiError> {
+pub(super) fn prepare(
+    snapshot: Value,
+    signer: &str,
+    network: &Network,
+) -> Result<PublicationPreparation, ApiError> {
     let collection = &snapshot["collection"];
     let id = text(collection, "id")?;
     let name = text(collection, "name")?;
@@ -193,10 +193,10 @@ pub(super) fn prepare(snapshot: Value, signer: &str) -> Result<PublicationPrepar
     Ok(PublicationPreparation {
         id: id.into(),
         revision: hash_bytes_v1(snapshot.to_string().as_bytes()),
-        chain_id: 137,
-        manager: COLLECTION_MANAGER.into(),
-        factory: COLLECTION_FACTORY.into(),
-        forwarder: COLLECTION_FORWARDER.into(),
+        chain_id: network.chain_id as u32,
+        manager: network.collection_manager.into(),
+        factory: network.collection_factory.into(),
+        forwarder: network.forwarder.into(),
         salt: format!("{salt:#x}"),
         name: name.into(),
         symbol: format!(
@@ -206,7 +206,7 @@ pub(super) fn prepare(snapshot: Value, signer: &str) -> Result<PublicationPrepar
                 .collect::<String>()
                 .to_uppercase()
         ),
-        base_uri: COLLECTION_BASE_URI.into(),
+        base_uri: network.base_uri.into(),
         creator: format!("{creator:#x}"),
         items,
     })

@@ -218,7 +218,7 @@ pub async fn get_committee(
     State(state): State<SharedState>,
 ) -> Result<Json<ApiData<Vec<Member>>>, ApiError> {
     Ok(Json(ApiData::ok(
-        crate::committee::members(state.items.pool()).await?,
+        crate::committee::members(state.items.pool(), &state.settings.network).await?,
     )))
 }
 

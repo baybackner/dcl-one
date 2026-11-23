@@ -574,7 +574,12 @@ impl Op {
             ThirdParties => ("GET", "/v1/thirdParties".to_string(), None),
             Publish => {
                 let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-                let digest = crate::cheques::digest(&f.provider, 1, salt.parse().unwrap());
+                let digest = crate::cheques::digest(
+                    &crate::network::POLYGON,
+                    &f.provider,
+                    1,
+                    salt.parse().unwrap(),
+                );
                 let signature = wallet(caller.key().unwrap_or(STRANGER_KEY))
                     .sign_hash_sync(&alloy_primitives::B256::from(digest))
                     .unwrap();
@@ -776,7 +781,12 @@ async fn a_manager_the_registry_stops_listing_is_refused_its_next_write_and_its_
         .set(&f.provider, "managers", json!([Manager.address()]));
     let (_, publish, body) = Publish.request(&f, Manager);
     let salt = format!("0x{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    let digest = crate::cheques::digest(&f.provider, 1, salt.parse().unwrap());
+    let digest = crate::cheques::digest(
+        &crate::network::POLYGON,
+        &f.provider,
+        1,
+        salt.parse().unwrap(),
+    );
     let signature = wallet(FORMER_KEY)
         .sign_hash_sync(&alloy_primitives::B256::from(digest))
         .unwrap();

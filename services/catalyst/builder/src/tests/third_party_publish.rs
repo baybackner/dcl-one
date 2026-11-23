@@ -133,7 +133,12 @@ fn salt() -> String {
 
 /// The cheque `key` signs for `qty` slots of `provider` under `salt`.
 fn cheque(key: &str, provider: &str, qty: i32, salt: &str) -> Value {
-    let digest = crate::cheques::digest(provider, qty, salt.parse().unwrap());
+    let digest = crate::cheques::digest(
+        &crate::network::POLYGON,
+        provider,
+        qty,
+        salt.parse().unwrap(),
+    );
     let signature = wallet(key)
         .sign_hash_sync(&alloy_primitives::B256::from(digest))
         .unwrap();
@@ -1033,6 +1038,7 @@ async fn the_committee_reads_what_its_registry_transaction_needs() {
         })
     );
     let digest = crate::cheques::digest(
+        &crate::network::POLYGON,
         &provider,
         2,
         first["salt"].as_str().unwrap().parse().unwrap(),

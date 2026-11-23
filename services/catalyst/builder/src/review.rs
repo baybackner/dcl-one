@@ -218,7 +218,8 @@ pub async fn comment(
     let mut tx = state.items.pool().begin().await?;
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;
-    let curated = access::confirm_reviewer(&mut tx, &view, &curator).await?;
+    let curated =
+        access::confirm_reviewer(&mut tx, &view, &state.settings.network, &curator).await?;
     if !curated.published {
         return Err(not_published(id));
     }
@@ -302,7 +303,8 @@ pub async fn appeal(
     let mut tx = state.items.pool().begin().await?;
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;
-    let curated = access::confirm_reviewer(&mut tx, &view, &curator).await?;
+    let curated =
+        access::confirm_reviewer(&mut tx, &view, &state.settings.network, &curator).await?;
     let latest: Option<String> = sqlx::query_scalar(
         "SELECT type FROM builder.collection_events WHERE collection_id = $1 AND type <> 'review.comment' \
          ORDER BY created_at DESC, id DESC LIMIT 1",
@@ -418,13 +420,14 @@ async fn within_daily_requests(
 /// since they were judged and then the last run's others.
 async fn retry_items(
     conn: &mut PgConnection,
+    network: &crate::network::Network,
     collection: Uuid,
     contract: &str,
 ) -> Result<Vec<Uuid>, ApiError> {
     let minted: Vec<(Uuid, String)> = validator::saved_items(conn, collection, None)
         .await?
         .iter()
-        .map(|item| (item.id, item.content_hash(contract)))
+        .map(|item| (item.id, item.content_hash(network, contract)))
         .collect();
     let Some((validation, previous, _)) = events::latest_start(conn, collection).await? else {
         return Ok(minted.into_iter().map(|(id, _)| id).collect());
@@ -474,7 +477,8 @@ pub async fn retry(state: &SharedState, curator: Curator) -> Result<EventOut, Ap
     let mut tx = state.items.pool().begin().await?;
     lock(&mut tx, id).await?;
     let view = chain_state::for_decision(&mut tx).await?;
-    let curated = access::confirm_reviewer(&mut tx, &view, &curator).await?;
+    let curated =
+        access::confirm_reviewer(&mut tx, &view, &state.settings.network, &curator).await?;
     if !curated.published {
         return Err(not_published(id));
     }
@@ -504,7 +508,7 @@ pub async fn retry(state: &SharedState, curator: Curator) -> Result<EventOut, Ap
         return Err(in_progress_refusal(id));
     }
     within_daily_requests(&mut tx, state, id).await?;
-    let items = retry_items(&mut tx, id, &contract).await?;
+    let items = retry_items(&mut tx, &state.settings.network, id, &contract).await?;
     let recorded = validator::record(
         &mut tx,
         state,
@@ -570,14 +574,21 @@ pub(crate) async fn submit(
     note: &str,
 ) -> Result<Submitted, ApiError> {
     let view = chain_state::for_decision(conn).await?;
-    let changed = match validator::changed(conn, &view, collection, contract).await? {
-        Ok(changed) => changed,
-        Err(_) => validator::saved_items(conn, collection, None)
-            .await?
-            .iter()
-            .map(|item| (item.id, item.content_hash(contract)))
-            .collect(),
-    };
+    let changed =
+        match validator::changed(conn, &view, &state.settings.network, collection, contract).await?
+        {
+            Ok(changed) => changed,
+            Err(_) => validator::saved_items(conn, collection, None)
+                .await?
+                .iter()
+                .map(|item| {
+                    (
+                        item.id,
+                        item.content_hash(&state.settings.network, contract),
+                    )
+                })
+                .collect(),
+        };
     let judged: HashMap<String, String> = events::judged_hashes(conn, collection).await?;
     let items: Vec<Uuid> = changed
         .into_iter()

@@ -99,7 +99,8 @@ pub(crate) async fn item(
     .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| ApiError::not_found("Item not found"))?;
-    row.withheld(&store.denylist).out(reached, full)
+    row.withheld(&store.denylist)
+        .out(&store.network, reached, full)
 }
 
 /// The statement that reads the rows of a list's bodies, the ids as `$1`.
@@ -145,7 +146,10 @@ pub(crate) async fn bodies(
     let mut rows: HashMap<Uuid, ItemRow> = rows.into_iter().map(|row| (row.id, row)).collect();
     ids.iter()
         .filter_map(|id| rows.remove(id))
-        .map(|row| row.withheld(&store.denylist).out(reached, full))
+        .map(|row| {
+            row.withheld(&store.denylist)
+                .out(&store.network, reached, full)
+        })
         .collect()
 }
 

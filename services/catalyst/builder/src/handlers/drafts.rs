@@ -78,7 +78,7 @@ pub async fn put_collection(
     }
     let edit = access::edit_collection(&state, &signer, uuid, provider).await?;
     let deployment = standard
-        .then(|| save::standard_deployment(&save, signer.as_str()))
+        .then(|| save::standard_deployment(&state.settings.network, &save, signer.as_str()))
         .transpose()?;
     if let Some(deployment) = &deployment {
         lifecycle::guard_address_change(&state, &edit, deployment.contract_address()).await?;

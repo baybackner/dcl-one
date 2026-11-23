@@ -135,6 +135,7 @@ pub(super) fn comms_settings(config: &Config) -> anyhow::Result<comms::gatekeepe
 /// is configured with.
 pub(super) fn builder_settings(config: &Config) -> anyhow::Result<builder::Settings> {
     builder::Settings::parse(builder::RawSettings {
+        eth_network: Some(config.node.eth_network.clone()),
         writes_enabled: config.create.create_writes_enabled,
         polygon_rpc_url: config.create.builder_polygon_rpc_url.clone(),
         admin_addresses: config.create.builder_admin_addresses.clone(),
@@ -249,6 +250,25 @@ mod tests {
             settings(&[("SLACK_CURATION_CHANNEL", "curation")]).unwrap_err()
         );
         assert!(err.contains("SLACK_BOT_TOKEN"), "{err}");
+    }
+
+    #[test]
+    fn the_builder_works_on_the_polygon_chain_eth_network_pairs() {
+        let settings = |extra: &[(&'static str, &'static str)]| {
+            let mut vars = vec![("DATABASE_URL", "postgres:///catalyst")];
+            vars.extend_from_slice(extra);
+            builder_settings(&Config::parse_env_for_tests(vars).unwrap())
+        };
+        assert_eq!(
+            settings(&[]).unwrap().network,
+            crate::builder::network::POLYGON
+        );
+        assert_eq!(
+            settings(&[("ETH_NETWORK", "sepolia")]).unwrap().network,
+            crate::builder::network::AMOY
+        );
+        let err = format!("{:#}", settings(&[("ETH_NETWORK", "goerli")]).unwrap_err());
+        assert!(err.contains("ETH_NETWORK=goerli"), "{err}");
     }
 
     #[test]

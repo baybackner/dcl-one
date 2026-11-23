@@ -1198,7 +1198,11 @@ async fn every_read_of_an_items_newest_curation_takes_the_last_created_one() {
         .into_iter()
         .next()
         .unwrap()
-        .out(crate::items::body::Reached::InList, true)
+        .out(
+            &crate::network::POLYGON,
+            crate::items::body::Reached::InList,
+            true,
+        )
         .unwrap();
     drop(conn);
     assert_eq!(

@@ -40,7 +40,13 @@ Pinned at `98897af692f26063a088aebb2ea5bb3f683168a2` (migrations through
   item curation, which the `item_curation` step copies.
 - `items.urn_suffix`: `urn:decentraland:matic:collections-v2:<contract>:<id>`
   for a published standard item, `third_party_id:collection:item` for a
-  third-party item.
+  third-party item. The source is production builder-server, which runs on
+  Polygon mainnet, so the URN network is always `matic` and the contract
+  addresses are mainnet's. Import only into a node whose `ETH_NETWORK` is
+  `mainnet`: the import can't see the target's network, and on an Amoy node
+  (`ETH_NETWORK=sepolia`) the imported collections never read as published,
+  because the Amoy copy holds none of their contracts, while their items
+  keep answering `matic` URNs.
 - `items.content_hash`: the newest item curation's content hash.
 - `items.data` and `items.metrics` are copied as the JSON text upstream
   stores, keys in the order a save wrote them: the content hash of a

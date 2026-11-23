@@ -184,13 +184,14 @@ impl CollectionRow {
         self.contract_address.as_deref()
     }
 
-    pub(crate) fn out(self, is_programmatic: Option<bool>) -> CollectionOut {
+    pub(crate) fn out(
+        self,
+        network: &crate::network::Network,
+        is_programmatic: Option<bool>,
+    ) -> CollectionOut {
         let urn = match (&self.third_party_id, self.urn_suffix) {
             (Some(_), Some(urn)) => urn,
-            _ => format!(
-                "urn:decentraland:matic:collections-v2:{}",
-                self.contract_address.as_deref().unwrap_or("null")
-            ),
+            _ => network.collection_urn(self.contract_address.as_deref().unwrap_or("null")),
         };
         let curated = match self.curation_dates.as_deref() {
             Some(&[created, updated]) => Some((created, updated)),
@@ -274,7 +275,7 @@ impl ItemsComponent {
             .ok_or_else(|| ApiError::not_found("Not found"))?;
         let programmatic = row.third_party().then_some(read.programmatic());
         project(
-            row.out(programmatic),
+            row.out(&self.network, programmatic),
             (!read.full()).then_some(PUBLIC_DETAIL),
         )
     }

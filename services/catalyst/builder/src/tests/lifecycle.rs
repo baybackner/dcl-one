@@ -64,6 +64,7 @@ struct Options {
     now: fn() -> DateTime<Utc>,
     warehouse: Option<String>,
     writes: bool,
+    network: crate::network::Network,
     tune: fn(&mut crate::State),
 }
 
@@ -75,6 +76,7 @@ impl Default for Options {
             now: Utc::now,
             warehouse: None,
             writes: true,
+            network: crate::network::POLYGON,
             tune: |_| {},
         }
     }
@@ -105,6 +107,7 @@ async fn node_over(pool: PgPool, options: Options) -> Node {
         market,
         None,
         crate::Settings {
+            network: options.network,
             writes_enabled: options.writes,
             polygon_rpc_url: options.rpc,
             warehouse: options.warehouse.map(|url| crate::WarehouseForward {
@@ -1688,6 +1691,123 @@ async fn an_rpc_of_another_network_shows_no_deployment() {
         "another network can't tell whether the collection is deployed"
     );
     assert_eq!(chain_ids(&node.pool, id).await, vec![None]);
+}
+
+/// builder-server with `CHAIN_NAME=Sepolia`: a draft is saved at the Amoy
+/// factory's address, publishes once an Amoy RPC shows it there, and its
+/// collection and items answer `amoy` URNs; a Polygon mainnet RPC can't
+/// tell an Amoy node anything.
+#[tokio::test]
+async fn an_amoy_node_saves_publishes_and_names_its_collections_on_amoy() {
+    use crate::collections::contract;
+    use crate::network::{AMOY, POLYGON};
+    let amoy = FakeOracle::default().on(AMOY);
+    let Some(node) = node(Options {
+        rpc: Some(amoy.url().await),
+        network: AMOY,
+        ..Options::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let saved = Uuid::new_v4();
+    let (status, body) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "PUT",
+        &format!("/v1/collections/{saved}"),
+        Some(collection_save(saved, &short("Amoy", saved))),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let calldata =
+        alloy_primitives::hex::decode(&contract::initialize_calldata(&address(OWNER_KEY))[2..])
+            .unwrap();
+    let salt = contract::salt(&saved.to_string());
+    let at = contract_of(&node.pool, saved).await;
+    assert_eq!(at, contract::address(&AMOY, salt, &calldata));
+    assert_ne!(at, contract::address(&POLYGON, salt, &calldata));
+    assert_eq!(
+        body["data"]["urn"],
+        json!(format!("urn:decentraland:amoy:collections-v2:{at}"))
+    );
+    let (status, listed) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "GET",
+        &format!("/v1/{}/collections", address(OWNER_KEY)),
+        None,
+    )
+    .await;
+    let rows = listed["data"]
+        .as_array()
+        .or(listed["data"]["results"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    let row = rows.iter().find(|r| r["id"] == json!(saved));
+    assert_eq!(
+        (status, row.map(|r| r["urn"].clone())),
+        (
+            200,
+            Some(json!(format!("urn:decentraland:amoy:collections-v2:{at}")))
+        ),
+        "{listed}"
+    );
+
+    let mainnet = FakeOracle::default();
+    let on_mainnet_rpc = node_over(
+        node.pool.clone(),
+        Options {
+            rpc: Some(mainnet.url().await),
+            network: AMOY,
+            ..Options::default()
+        },
+    )
+    .await;
+    let (id, items, _) = draft(&node, 1).await;
+    let contract = contract_of(&node.pool, id).await;
+    mainnet.deploy(&contract, 1);
+    let (status, _) = call(
+        &on_mainnet_rpc.app,
+        Some(OWNER_KEY),
+        "DELETE",
+        &format!("/v1/collections/{id}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 503, "a Polygon mainnet RPC can't tell an Amoy node");
+
+    amoy.deploy(&contract, 1);
+    let (status, body) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "POST",
+        &format!("/v1/collections/{id}/publish"),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let item_urn = format!("urn:decentraland:amoy:collections-v2:{contract}:0");
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT urn_suffix FROM builder.items WHERE id = $1")
+            .bind(items[0])
+            .fetch_one(&node.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some(item_urn.as_str()));
+    let (status, item) = call(
+        &node.app,
+        Some(OWNER_KEY),
+        "GET",
+        &format!("/v1/items/{}", items[0]),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, item["data"]["urn"].clone()),
+        (200, json!(item_urn))
+    );
 }
 
 #[tokio::test]

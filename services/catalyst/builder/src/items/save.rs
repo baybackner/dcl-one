@@ -346,7 +346,9 @@ impl ItemsComponent {
                     blockchain_item_id
                         .as_deref()
                         .zip(hash_contract.as_deref())
-                        .map(|(item, contract)| hash::standard(&hashed, contract, item)),
+                        .map(|(item, contract)| {
+                            hash::standard(&self.network, &hashed, contract, item)
+                        }),
                 ),
                 SavePlan::ThirdParty { urn } => (
                     save.signer().to_string(),

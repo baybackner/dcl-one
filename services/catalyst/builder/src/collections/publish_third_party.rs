@@ -123,7 +123,9 @@ pub async fn publish(
     request: &Request,
 ) -> Result<ThirdPartyPublished, ApiError> {
     let id = grant.id();
-    let signer = request.cheque.signer(grant.provider());
+    let signer = request
+        .cheque
+        .signer(&state.settings.network, grant.provider());
     let stored = request.cheque.stored();
     let mut tx = state.items.pool().begin().await?;
     sqlx::query("SELECT id FROM builder.collections WHERE id = $1 FOR UPDATE")

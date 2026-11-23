@@ -21,6 +21,7 @@ use crate::chain_index::third_parties::LinkedContract;
 use crate::chain_state;
 use crate::http::ApiError;
 use crate::items::ItemsComponent;
+use crate::network::Network;
 use crate::third_parties::{parse_raw_metadata, raw_metadata};
 
 use super::{contract, project, row};
@@ -192,15 +193,20 @@ fn invalid_data(save: &CollectionSave, signer: &str) -> ApiError {
         .with_data(json!({ "id": save.id, "eth_address": signer }))
 }
 
-/// The salt and contract address of a standard save whose signer may save
-/// it: `data` must be `initialize` calldata naming the signer.
-pub fn standard_deployment(save: &CollectionSave, signer: &str) -> Result<Deployment, ApiError> {
+/// The salt and contract address on `network` of a standard save whose
+/// signer may save it: `data` must be `initialize` calldata naming the
+/// signer.
+pub fn standard_deployment(
+    network: &Network,
+    save: &CollectionSave,
+    signer: &str,
+) -> Result<Deployment, ApiError> {
     standard_request(save, signer)?;
     let data = save.data.as_deref().unwrap_or_default();
     let bytes = contract::initialize_for(data, signer).ok_or_else(|| invalid_data(save, signer))?;
     let salt = contract::salt(&save.id);
     Ok(Deployment {
-        contract_address: contract::address(salt, &bytes),
+        contract_address: contract::address(network, salt, &bytes),
         salt: format!("{salt:#x}"),
     })
 }
@@ -549,7 +555,7 @@ impl ItemsComponent {
             ApiError::internal(format!("collection {id} vanished after its save"))
         })?;
         tx.commit().await?;
-        project(body.out(None), None)
+        project(body.out(&self.network, None), None)
     }
 }
 
@@ -657,7 +663,9 @@ mod tests {
             );
         }
         save.data = Some("0x00".into());
-        let refused = standard_deployment(&save, owner).err().unwrap();
+        let refused = standard_deployment(&crate::network::POLYGON, &save, owner)
+            .err()
+            .unwrap();
         assert_eq!(
             (refused.status(), refused.to_string().as_str()),
             (409, "Cannot upsert a collection without a valid data")

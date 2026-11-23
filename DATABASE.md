@@ -1095,7 +1095,12 @@ submission compares each item's content with, "Builder validation requests
 workload") and `shop.mirror_state` (`last_complete_pass_at`,
 `pass_started_at` and `cursor_id` of `('collections', 'matic')`). The shop's
 `collections-mirror` and items mirror jobs write them; the builder reads
-`network = 'matic'` only, as upstream reads only the Polygon subgraph.
+`network = 'matic'` only, as upstream reads only the Polygon subgraph. The
+mirror stores Amoy's rows under `matic` too, so the predicate holds on the
+builder's chain either way (`ETH_NETWORK`, `services/catalyst/docs/builder.md`
+"Network"). Which chain the copy holds is the subgraph
+`MATIC_COLLECTIONS_SUBGRAPH_URL` names: `shop.mirror_state` binds no chain
+id, so the builder can't refuse a copy of another chain.
 
 The builder's own rows: a `builder.collections` row is a creator's draft.
 
@@ -3751,20 +3756,23 @@ stored hash clears it.
 Every builder decision only the committee could grant (`builder::access`:
 the committee's listings, another wallet's collections and items, draft
 reads, curation writes, forum replies) and `GET /v1/committee` read the
-current members of the Polygon curation committee; `BUILDER_ADMIN_ADDRESSES`
+current members of the curation committee on the builder's Polygon chain
+(137, or Amoy's 80002, as `ETH_NETWORK` pairs); `BUILDER_ADMIN_ADDRESSES`
 grants no committee role (its wallets' signed requests, like the curation
 console's bearer, open only the operator's item status routes and
 `GET /v1/collections/curation`). Shop's `committee` index
-(`MARKETPLACE_COMMITTEE_INDEX_ENABLED`) walks the two Committee contracts'
-`MemberSet` logs from the first one's deployment into `shop.committee_event`
-over the `TRADE_RPC_URLS` 137 entry, else on mainnet `RPC_ENDPOINT_POLYGON`,
-once the endpoint answers chain id 137 (tens of rows, appended with the cursor advance in `shop.chain_cursor`,
+(`MARKETPLACE_COMMITTEE_INDEX_ENABLED`) walks the `MemberSet` logs of the
+Committee contracts of the chain `MARKETPLACE_INDEX_CHAIN_ID_MATIC` names
+(Polygon's two, from the first one's deployment, or Amoy's one) into
+`shop.committee_event` over that chain's `TRADE_RPC_URLS` entry, else for 137
+on mainnet `RPC_ENDPOINT_POLYGON`, once the endpoint answers that chain id,
+and binds its cursor to that chain (tens of rows, appended with the cursor advance in `shop.chain_cursor`,
 deleted past a reorg rewind). Builder reads, never writes, both tables by
 shared SQL in one statement: `shop.committee_event` (`network`,
 `block_number`, `log_index`, `member`, `is_member`) and `shop.chain_cursor`
 (`indexer`, `network`, `full_history`, `chain_id`, `quarantined_at`,
-`folded_block`, `folded_at`); the cursor must be bound to chain 137 and out
-of quarantine (see "Market chain index cursors"). A
+`folded_block`, `folded_at`); the cursor must be bound to the builder's
+chain and out of quarantine (see "Market chain index cursors"). A
 wallet is a member when its latest event (block, log index) at or below the
 published block (`folded_block`) set it, so rows a pass adds before its
 publish wait for it. Unlike the shop routes' readiness rule, it does not
@@ -3776,8 +3784,8 @@ connection, after its row locks: a curator the committee admitted and the
 assignee it names must still be members (401 otherwise). The
 statement compares `folded_at` with `statement_timestamp()`, so a read
 inside a transaction that began before the index's latest publish still
-sees it published. An index that is off, not yet published, not bound to
-chain 137, in quarantine or published more than 30 minutes ago
+sees it published. An index that is off, not yet published, bound to
+another chain than the builder's, in quarantine or published more than 30 minutes ago
 (`READY_WINDOW`), or a failed read, can't tell: a decision
 only the committee could grant and `GET /v1/committee` answer 503, a view
 the committee only widens answers as for any signer, and the console lists

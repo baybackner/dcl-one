@@ -7,8 +7,8 @@
 //!
 //! Every question reads the index afresh, so a wallet removed from the
 //! committee loses the role once the index publishes the block that removed
-//! it. An unpublished index, one not bound to Polygon (chain 137) or in
-//! quarantine, one published more than 30 minutes ago, or a failed read
+//! it. An unpublished index, one not bound to the node's Polygon chain
+//! ([`crate::network`]: 137 on mainnet, 80002 on Amoy) or in quarantine, one published more than 30 minutes ago, or a failed read
 //! can't tell who is on the committee: [`members`] and
 //! [`is_member`] answer 503 then, never an empty committee, and
 //! [`known_member`] answers false.
@@ -17,6 +17,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::http::ApiError;
+use crate::network::Network;
 
 /// One statement, so the published block and the members are one snapshot.
 /// Unlike `chain_walk::is_ready` it does not require `folded_block =
@@ -27,7 +28,7 @@ const MEMBERS_SQL: &str = "\
 WITH ready AS (
   SELECT folded_block FROM shop.chain_cursor
   WHERE indexer = 'committee' AND network = 'matic' AND full_history
-    AND chain_id = 137 AND quarantined_at IS NULL
+    AND chain_id = $1 AND quarantined_at IS NULL
     AND folded_block IS NOT NULL
     AND folded_at <= timezone('UTC', statement_timestamp())
     AND folded_at >= timezone('UTC', statement_timestamp()) - interval '30 minutes'
@@ -51,18 +52,22 @@ pub struct Member {
     pub address: String,
 }
 
-/// The current members, lowercase and sorted; `None` while the index is
-/// unpublished, unbound, in quarantine or stale.
+/// The current members on `network`, lowercase and sorted; `None` while the
+/// index is unpublished, bound to another chain, in quarantine or stale.
 pub async fn current_members<'e>(
     pool: impl sqlx::PgExecutor<'e>,
+    network: &Network,
 ) -> Result<Option<Vec<String>>, sqlx::Error> {
-    let (ready, members): (bool, Vec<String>) = sqlx::query_as(MEMBERS_SQL).fetch_one(pool).await?;
+    let (ready, members): (bool, Vec<String>) = sqlx::query_as(MEMBERS_SQL)
+        .bind(network.chain_id as i64)
+        .fetch_one(pool)
+        .await?;
     Ok(ready.then_some(members))
 }
 
 /// The current members; 503 when the index can't tell.
-pub async fn members(pool: &PgPool) -> Result<Vec<Member>, ApiError> {
-    let members = read(pool).await?;
+pub async fn members(pool: &PgPool, network: &Network) -> Result<Vec<Member>, ApiError> {
+    let members = read(pool, network).await?;
     Ok(members
         .into_iter()
         .map(|address| Member {
@@ -75,21 +80,25 @@ pub async fn members(pool: &PgPool) -> Result<Vec<Member>, ApiError> {
 /// Whether `address` is a current member; 503 when the index can't tell.
 pub async fn is_member<'e>(
     pool: impl sqlx::PgExecutor<'e>,
+    network: &Network,
     address: &str,
 ) -> Result<bool, ApiError> {
-    Ok(contains(&read(pool).await?, address))
+    Ok(contains(&read(pool, network).await?, address))
 }
 
 /// Whether the index shows `address` on the committee; false when it can't
 /// tell, for a view only the committee widens.
-pub async fn known_member(pool: &PgPool, address: &str) -> bool {
-    read(pool)
+pub async fn known_member(pool: &PgPool, network: &Network, address: &str) -> bool {
+    read(pool, network)
         .await
         .is_ok_and(|members| contains(&members, address))
 }
 
-async fn read<'e>(pool: impl sqlx::PgExecutor<'e>) -> Result<Vec<String>, ApiError> {
-    match current_members(pool).await {
+async fn read<'e>(
+    pool: impl sqlx::PgExecutor<'e>,
+    network: &Network,
+) -> Result<Vec<String>, ApiError> {
+    match current_members(pool, network).await {
         Ok(Some(members)) => Ok(members),
         Ok(None) => {
             tracing::warn!("committee index unpublished or stale; committee decisions answer 503");
@@ -113,6 +122,7 @@ fn unavailable() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::{AMOY, POLYGON};
     use crate::tests::support::{publish_committee_at, record_committee_event};
 
     const REMOVED: &str = "0x00000000000000000000000000000000000000c1";
@@ -136,34 +146,37 @@ mod tests {
             record_committee_event(&pool, block, contract, wallet, set).await;
         }
         assert_eq!(
-            is_member(&pool, MEMBER).await.unwrap_err().status(),
+            is_member(&pool, &POLYGON, MEMBER)
+                .await
+                .unwrap_err()
+                .status(),
             503,
             "an unpublished index can't tell"
         );
-        assert!(!known_member(&pool, MEMBER).await);
+        assert!(!known_member(&pool, &POLYGON, MEMBER).await);
 
         publish_committee_at(&pool, 100, "timezone('UTC', now())").await;
         assert_eq!(
-            members(&pool).await.unwrap(),
+            members(&pool, &POLYGON).await.unwrap(),
             vec![Member {
                 id: MEMBER.into(),
                 address: MEMBER.into()
             }]
         );
         assert!(
-            is_member(&pool, &MEMBER.to_uppercase().replace("0X", "0x"))
+            is_member(&pool, &POLYGON, &MEMBER.to_uppercase().replace("0X", "0x"))
                 .await
                 .unwrap()
         );
         assert!(
-            !is_member(&pool, REMOVED).await.unwrap(),
+            !is_member(&pool, &POLYGON, REMOVED).await.unwrap(),
             "its latest event removed it"
         );
         assert!(
-            !is_member(&pool, PENDING).await.unwrap(),
+            !is_member(&pool, &POLYGON, PENDING).await.unwrap(),
             "past the published block"
         );
-        assert!(known_member(&pool, MEMBER).await);
+        assert!(known_member(&pool, &POLYGON, MEMBER).await);
 
         for (cursor, why) in [
             ("chain_id = NULL", "an unadopted cursor can't tell"),
@@ -180,12 +193,19 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(
-                is_member(&pool, MEMBER).await.unwrap_err().status(),
+                is_member(&pool, &POLYGON, MEMBER)
+                    .await
+                    .unwrap_err()
+                    .status(),
                 503,
                 "{why}"
             );
-            assert_eq!(members(&pool).await.unwrap_err().status(), 503, "{why}");
-            assert!(!known_member(&pool, MEMBER).await, "{why}");
+            assert_eq!(
+                members(&pool, &POLYGON).await.unwrap_err().status(),
+                503,
+                "{why}"
+            );
+            assert!(!known_member(&pool, &POLYGON, MEMBER).await, "{why}");
             sqlx::query(
                 "UPDATE shop.chain_cursor SET chain_id = 137, quarantined_at = NULL, quarantine_reason = NULL \
                  WHERE indexer = 'committee'",
@@ -195,44 +215,76 @@ mod tests {
             .unwrap();
         }
         assert!(
-            is_member(&pool, MEMBER).await.unwrap(),
+            is_member(&pool, &POLYGON, MEMBER).await.unwrap(),
             "once bound and out of quarantine"
         );
+        assert_eq!(
+            is_member(&pool, &AMOY, MEMBER).await.unwrap_err().status(),
+            503,
+            "a Polygon mainnet index can't tell an Amoy node"
+        );
+        assert!(!known_member(&pool, &AMOY, MEMBER).await);
+        sqlx::query("UPDATE shop.chain_cursor SET chain_id = 80002 WHERE indexer = 'committee'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            is_member(&pool, &AMOY, MEMBER).await.unwrap(),
+            "an Amoy index tells an Amoy node"
+        );
+        assert_eq!(
+            members(&pool, &POLYGON).await.unwrap_err().status(),
+            503,
+            "an Amoy index can't tell a mainnet node"
+        );
+        sqlx::query("UPDATE shop.chain_cursor SET chain_id = 137 WHERE indexer = 'committee'")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         sqlx::query("UPDATE shop.chain_cursor SET last_block = 200 WHERE indexer = 'committee'")
             .execute(&pool)
             .await
             .unwrap();
         assert!(
-            !is_member(&pool, PENDING).await.unwrap(),
+            !is_member(&pool, &POLYGON, PENDING).await.unwrap(),
             "a walk ahead of its publish keeps the published membership"
         );
         publish_committee_at(&pool, 200, "timezone('UTC', now())").await;
-        assert!(is_member(&pool, PENDING).await.unwrap(), "once published");
+        assert!(
+            is_member(&pool, &POLYGON, PENDING).await.unwrap(),
+            "once published"
+        );
 
         record_committee_event(&pool, 210, CURRENT, MEMBER, false).await;
         publish_committee_at(&pool, 210, "timezone('UTC', now())").await;
         assert!(
-            !is_member(&pool, MEMBER).await.unwrap(),
+            !is_member(&pool, &POLYGON, MEMBER).await.unwrap(),
             "a removal counts from the publish that holds it"
         );
 
         publish_committee_at(&pool, 210, "timezone('UTC', now()) - interval '31 minutes'").await;
         assert_eq!(
-            is_member(&pool, PENDING).await.unwrap_err().status(),
+            is_member(&pool, &POLYGON, PENDING)
+                .await
+                .unwrap_err()
+                .status(),
             503,
             "a stale index can't tell"
         );
-        assert_eq!(members(&pool).await.unwrap_err().status(), 503);
-        assert!(!known_member(&pool, PENDING).await);
+        assert_eq!(members(&pool, &POLYGON).await.unwrap_err().status(), 503);
+        assert!(!known_member(&pool, &POLYGON, PENDING).await);
 
         publish_committee_at(&pool, 210, "timezone('UTC', now()) + interval '1 hour'").await;
         assert_eq!(
-            is_member(&pool, PENDING).await.unwrap_err().status(),
+            is_member(&pool, &POLYGON, PENDING)
+                .await
+                .unwrap_err()
+                .status(),
             503,
             "a publish stamped in the future can't tell"
         );
-        assert!(!known_member(&pool, PENDING).await);
+        assert!(!known_member(&pool, &POLYGON, PENDING).await);
 
         publish_committee_at(&pool, 210, "timezone('UTC', now())").await;
         sqlx::query("ALTER TABLE shop.committee_event RENAME TO committee_event_gone")
@@ -240,11 +292,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            is_member(&pool, PENDING).await.unwrap_err().status(),
+            is_member(&pool, &POLYGON, PENDING)
+                .await
+                .unwrap_err()
+                .status(),
             503,
             "a failed read can't tell"
         );
-        assert!(!known_member(&pool, PENDING).await);
+        assert!(!known_member(&pool, &POLYGON, PENDING).await);
         pool.close().await;
     }
 }

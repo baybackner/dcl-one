@@ -750,11 +750,11 @@ async fn decision(
 /// Whether the committee index shows `signer` on it, false when it can't
 /// tell: for a view only the committee widens.
 async fn known_committee(state: &SharedState, signer: &str) -> bool {
-    crate::committee::known_member(state.items.pool(), signer).await
+    crate::committee::known_member(state.items.pool(), &state.settings.network, signer).await
 }
 
 async fn on_committee(state: &SharedState, signer: &str) -> Result<bool, ApiError> {
-    crate::committee::is_member(state.items.pool(), signer).await
+    crate::committee::is_member(state.items.pool(), &state.settings.network, signer).await
 }
 
 /// The signer's own wallet, for a listing of the rows it owns itself.
@@ -1884,13 +1884,15 @@ pub(crate) async fn confirm_third_party_publish(
 pub(crate) async fn confirm_collection_sync(
     conn: &mut PgConnection,
     view: &DecisionView,
+    network: &crate::network::Network,
     sync: &CollectionSync,
 ) -> Result<(), ApiError> {
     let c = collection(conn, view, sync.id, providers(&sync.registry))
         .await?
         .ok_or_else(|| not_found(sync.id, COLLECTIONS))?;
     if !c.role(&sync.signer)
-        && !(sync.committee && crate::committee::is_member(&mut *conn, &sync.signer).await?)
+        && !(sync.committee
+            && crate::committee::is_member(&mut *conn, network, &sync.signer).await?)
     {
         return Err(unauthorized_user(&sync.signer, COLLECTIONS, sync.id));
     }
@@ -2197,6 +2199,7 @@ pub struct CuratedState {
 pub(crate) async fn confirm_curator(
     conn: &mut PgConnection,
     view: &DecisionView,
+    network: &crate::network::Network,
     curator: &Curator,
 ) -> Result<CuratedState, ApiError> {
     let (c, role) = curated(conn, view, curator).await?;
@@ -2206,7 +2209,7 @@ pub(crate) async fn confirm_curator(
             .with_data(json!({ "id": curator.collection, "ethAddress": s })));
     }
     keeps_role(curator, role)?;
-    keeps_committee(conn, curator, false).await?;
+    keeps_committee(conn, network, curator, false).await?;
     curated_state(conn, curator, c).await
 }
 
@@ -2215,12 +2218,13 @@ pub(crate) async fn confirm_curator(
 /// write's connection.
 async fn keeps_committee(
     conn: &mut PgConnection,
+    network: &crate::network::Network,
     curator: &Curator,
     role: bool,
 ) -> Result<(), ApiError> {
     if curator.committee
         && !role
-        && !crate::committee::is_member(&mut *conn, curator.signer.as_str()).await?
+        && !crate::committee::is_member(&mut *conn, network, curator.signer.as_str()).await?
     {
         return Err(ApiError::unauthorized("Unauthorized").with_data(
             json!({ "id": curator.item.unwrap_or(curator.collection), "ethAddress": curator.signer }),
@@ -2233,9 +2237,10 @@ async fn keeps_committee(
 /// connection after the decision: [`assignable`] again.
 pub(crate) async fn still_assignable(
     conn: &mut PgConnection,
+    network: &crate::network::Network,
     address: &str,
 ) -> Result<bool, ApiError> {
-    crate::committee::is_member(conn, &address.to_ascii_lowercase()).await
+    crate::committee::is_member(conn, network, &address.to_ascii_lowercase()).await
 }
 
 /// [`review_member`]'s and [`review_creator`]'s decision again, inside the
@@ -2245,11 +2250,12 @@ pub(crate) async fn still_assignable(
 pub(crate) async fn confirm_reviewer(
     conn: &mut PgConnection,
     view: &DecisionView,
+    network: &crate::network::Network,
     curator: &Curator,
 ) -> Result<CuratedState, ApiError> {
     let (c, role) = curated(conn, view, curator).await?;
     keeps_role(curator, role)?;
-    keeps_committee(conn, curator, role).await?;
+    keeps_committee(conn, network, curator, role).await?;
     curated_state(conn, curator, c).await
 }
 

@@ -2278,3 +2278,29 @@ async fn the_committee_walk_reads_polygon_on_mainnet_when_trade_rpc_urls_has_no_
         "off mainnet RPC_ENDPOINT_POLYGON is another chain"
     );
 }
+
+#[tokio::test]
+async fn the_committee_walk_of_amoy_reads_only_amoys_trade_rpc_urls_entry() {
+    use super::chain_walk::ChainNet;
+    let settings = |network: &str, trade: Option<&str>| {
+        let mut s = Settings::for_tests();
+        s.eth_network = network.to_string();
+        s.polygon_rpc_url = Some("https://polygon.example/".into());
+        s.market.indexes.chain_id_matic = 80_002;
+        s.market.trade_rpc_urls = super::listings::RpcEndpoints::from_env(trade);
+        support::state_without_db_settings(s)
+    };
+    let amoy = settings(
+        "sepolia",
+        Some("137=https://matic.example/,80002=https://amoy.example/"),
+    );
+    assert_eq!(
+        amoy.committee_rpc_url(ChainNet::Matic).as_deref(),
+        Some("https://amoy.example/")
+    );
+    assert_eq!(
+        settings("mainnet", Some("137=https://matic.example/")).committee_rpc_url(ChainNet::Matic),
+        None,
+        "no other chain's endpoint stands in for Amoy"
+    );
+}

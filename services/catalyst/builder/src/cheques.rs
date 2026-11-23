@@ -1,21 +1,20 @@
 //! A third-party publication's slot cheque: a provider manager's EIP-712
-//! `ConsumeSlots(thirdPartyId, qty, salt)` signature under the Polygon Third
-//! Party Registry's domain, which the committee's registry transaction
+//! `ConsumeSlots(thirdPartyId, qty, salt)` signature under the Third Party
+//! Registry's domain on the node's Polygon chain ([`crate::network`]: the
+//! registry is the verifying contract and the chain id the `salt`), as
+//! builder-server's `buildChequeSignatureData` builds it, which the
+//! committee's registry transaction
 //! consumes. This reads one from a request, normalizes it and recovers its
 //! signer; nothing here signs.
 
-use alloy_primitives::{Address, B256, U256, address};
+use alloy_primitives::{Address, B256, U256};
 use dcl_auth::eip712::{
     domain_separator_salted, hash_dynamic, struct_hash, typed_data_digest, word_u256,
 };
 use serde::Serialize;
 use serde_json::Value;
 
-/// The Third Party Registry on Polygon mainnet, the cheque's verifying
-/// contract.
-pub const REGISTRY: Address = address!("1C436C1EFb4608dFfDC8bace99d2B03c314f3348");
-/// Polygon mainnet, which the registry domain's `salt` carries.
-pub const CHAIN_ID: u64 = 137;
+use crate::network::Network;
 const NAME: &str = "Decentraland Third Party Registry";
 const VERSION: &str = "1";
 const CONSUME_SLOTS: &str = "ConsumeSlots(string thirdPartyId,uint256 qty,bytes32 salt)";
@@ -55,15 +54,15 @@ impl Offer {
         }
     }
 
-    /// The wallet that signed this cheque for the provider `third_party_id`,
-    /// lowercased; why not when the salt or signature can't be read or
-    /// recovered.
-    pub fn signer(&self, third_party_id: &str) -> Result<String, &'static str> {
+    /// The wallet that signed this cheque for the provider `third_party_id`
+    /// on `network`, lowercased; why not when the salt or signature can't be
+    /// read or recovered.
+    pub fn signer(&self, network: &Network, third_party_id: &str) -> Result<String, &'static str> {
         let qty = self.qty.ok_or("invalid quantity")?;
         let salt = self.salt.ok_or("invalid salt")?;
         let signature = self.signature.ok_or("invalid signature")?;
         dcl_auth::recover_address_from_digest(
-            &digest(third_party_id, qty, salt),
+            &digest(network, third_party_id, qty, salt),
             &format!("0x{}", hex::encode(signature)),
         )
         .map(|address| address.to_ascii_lowercase())
@@ -115,21 +114,24 @@ fn signature(raw: &str) -> Option<[u8; 65]> {
     Some(out)
 }
 
-/// The registry domain's separator.
-pub fn domain() -> [u8; 32] {
+/// The registry domain's separator on `network`.
+pub fn domain(network: &Network) -> [u8; 32] {
     domain_separator_salted(
         NAME,
         VERSION,
-        REGISTRY,
-        U256::from(CHAIN_ID).to_be_bytes::<32>(),
+        network
+            .third_party_registry
+            .parse::<Address>()
+            .unwrap_or_default(),
+        U256::from(network.chain_id).to_be_bytes::<32>(),
     )
 }
 
 /// The EIP-712 digest a manager signs: also the id the registry gives the
 /// receipt of a consumed cheque.
-pub fn digest(third_party_id: &str, qty: i32, salt: B256) -> [u8; 32] {
+pub fn digest(network: &Network, third_party_id: &str, qty: i32, salt: B256) -> [u8; 32] {
     typed_data_digest(
-        domain(),
+        domain(network),
         struct_hash(
             hash_dynamic(CONSUME_SLOTS.as_bytes()),
             &[
@@ -141,13 +143,14 @@ pub fn digest(third_party_id: &str, qty: i32, salt: B256) -> [u8; 32] {
     )
 }
 
-/// The receipt id of the stored cheque `cheque` of `third_party_id`:
-/// lowercase `0x` hex; none when the stored salt doesn't read.
-pub fn receipt_id(third_party_id: &str, cheque: &Cheque) -> Option<String> {
+/// The receipt id on `network` of the stored cheque `cheque` of
+/// `third_party_id`: lowercase `0x` hex; none when the stored salt doesn't
+/// read.
+pub fn receipt_id(network: &Network, third_party_id: &str, cheque: &Cheque) -> Option<String> {
     let salt = salt(&cheque.salt)?;
     Some(format!(
         "0x{}",
-        hex::encode(digest(third_party_id, cheque.qty, salt))
+        hex::encode(digest(network, third_party_id, cheque.qty, salt))
     ))
 }
 

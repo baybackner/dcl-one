@@ -74,12 +74,15 @@ pub async fn claim(state: &State) -> Result<Option<Claimed>, ApiError> {
         let mut hashes = Map::new();
         let mut manifest = Vec::with_capacity(items.len());
         for item in &items {
-            let content_hash = item.content_hash(&contract);
+            let content_hash = item.content_hash(&state.settings.network, &contract);
             hashes.insert(item.id.to_string(), Value::String(content_hash.clone()));
             let entry = JsJson::Object(vec![
                 ("itemId".into(), JsJson::String(item.id.to_string())),
                 ("contentHash".into(), JsJson::String(content_hash)),
-                ("metadata".into(), item.metadata(&contract)),
+                (
+                    "metadata".into(),
+                    item.metadata(&state.settings.network, &contract),
+                ),
                 ("contents".into(), item.deployed_files()),
             ]);
             manifest.push(
@@ -389,7 +392,12 @@ pub async fn settle(
             Some(contract) => saved_items(&mut tx, collection, Some(&item_ids))
                 .await?
                 .iter()
-                .map(|item| (item.id, item.content_hash(&contract)))
+                .map(|item| {
+                    (
+                        item.id,
+                        item.content_hash(&state.settings.network, &contract),
+                    )
+                })
                 .collect(),
             None => Default::default(),
         };

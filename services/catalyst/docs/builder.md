@@ -23,6 +23,33 @@ restore point, with `psql -X -f`, in this order:
 
 `DATABASE.md`, the "Retired builder" sections, gives each script's rollout.
 
+## Network
+
+The builder works on the Polygon chain the node's `ETH_NETWORK` pairs, the
+role builder-server's `CHAIN_NAME` plays: `mainnet` (the default) is Polygon
+(chain 137, URN network `matic`), and `sepolia` is Amoy (chain 80002, URN
+network `amoy`). The chain decides the collection manager, factory and
+forwarder of a publication, the factory's proxy code hash a collection's
+address is computed with, the base URI, the rarities oracle, the third-party
+registry that slot cheques are signed under, and the network of the
+collection and item URNs the builder answers and stores. Startup refuses
+any other `ETH_NETWORK`.
+
+Every chain source the builder reads must serve that chain:
+
+- `BUILDER_POLYGON_RPC_URL`: the receipt check, the deployment check and the
+  rarities read ask its `eth_chainId` and answer 503 when it names another
+  chain.
+- The committee index: the builder reads it only while its cursor is bound
+  to that chain, and answers 503 otherwise.
+- `MATIC_COLLECTIONS_SUBGRAPH_URL` and `THIRD_PARTY_REGISTRY_L2_SUBGRAPH_URL`:
+  the node can't check which chain a subgraph indexes. Point them at that
+  chain's subgraphs.
+
+Never change `ETH_NETWORK` on a database that holds builder rows. Saved
+collections keep the contract address computed for the old chain's factory,
+and published items keep their URNs.
+
 ## Chain state and the committee
 
 The builder derives a collection's published and approved state and its
@@ -33,12 +60,14 @@ from the shop's committee index, on the same node.
   collections mirror. Until its first complete pass, listings and bodies
   answer 503; once a pass is more than 30 minutes old, saves and deletes
   answer 503 and a publish 401.
-- `MARKETPLACE_COMMITTEE_INDEX_ENABLED`, which walks the Polygon committee
-  over `TRADE_RPC_URLS` (its `137` entry), else `RPC_ENDPOINT_POLYGON`.
-  While the index is unpublished or was published more than 30 minutes ago,
+- `MARKETPLACE_COMMITTEE_INDEX_ENABLED`, which walks the committee of the
+  chain `MARKETPLACE_INDEX_CHAIN_ID_MATIC` names (137, or 80002 on Amoy)
+  over that chain's `TRADE_RPC_URLS` entry, else for 137 on mainnet
+  `RPC_ENDPOINT_POLYGON`. While the index is unpublished, bound to another
+  chain than the builder's, or was published more than 30 minutes ago,
   every decision that needs the committee answers 503.
-- `BUILDER_POLYGON_RPC_URL`: an `https` Polygon JSON-RPC on a public host,
-  with the `finalized` block tag. It verifies publication receipts, reads the
+- `BUILDER_POLYGON_RPC_URL`: an `https` JSON-RPC of the builder's Polygon
+  chain on a public host, with the `finalized` block tag. It verifies publication receipts, reads the
   rarities' prices and checks a collection's contract before a save that
   changes its address, a delete and a publish. Unset, the publication and
   rarities routes answer 503 and the contract check is skipped.

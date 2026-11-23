@@ -1,8 +1,9 @@
 //! The receipt half of a standard publication: the client signs and submits
 //! the collection-manager transaction from its own wallet and reports the
 //! hash; this verifies over the Polygon JSON-RPC (`BUILDER_POLYGON_RPC_URL`,
-//! through the ONE guarded client) that the transaction is the reviewed
-//! calldata from the owner's wallet to the manager, records it, and once
+//! through the ONE guarded client), once it answers the node's chain
+//! ([`crate::network`]), that the transaction is the reviewed
+//! calldata from the owner's wallet to that chain's manager, records it, and once
 //! the receipt is in a finalized canonical block reads the factory event,
 //! the deployed collection's creator and item count, and finishes the
 //! attempt as `published` or `reverted`. v2 never holds a signing key.
@@ -18,8 +19,9 @@ use dcl_http::jsonrpc::{Rpc, RpcError};
 
 use super::http::ApiError;
 use super::items::ItemsComponent;
-use super::publication::{COLLECTION_FACTORY, COLLECTION_MANAGER, PublicationPreparation};
+use super::publication::PublicationPreparation;
 use super::publication_store::PublicationState;
+use crate::network::Network;
 
 sol! {
     struct ContractItem { string rarity; uint256 price; address beneficiary; string metadata; }
@@ -101,10 +103,12 @@ impl PublicationChain<'_> {
         if state.status == "published" || state.status == "reverted" {
             return Ok(state);
         }
-        if quantity(&self.rpc("eth_chainId", json!([])).await?)? != U256::from(137) {
-            return Err(ApiError::service_unavailable(
-                "Publication verification requires Polygon Mainnet",
-            ));
+        let network = &store.network;
+        if quantity(&self.rpc("eth_chainId", json!([])).await?)? != U256::from(network.chain_id) {
+            return Err(ApiError::service_unavailable(format!(
+                "Publication verification requires the Polygon chain {}",
+                network.chain_id
+            )));
         }
         let transaction = self.rpc("eth_getTransactionByHash", json!([hash])).await?;
         if transaction.is_null() {
@@ -112,7 +116,7 @@ impl PublicationChain<'_> {
                 "The transaction is not visible on Polygon yet. Retry with the same hash.",
             ));
         }
-        verify_transaction(&transaction, &state.preparation, &hash)?;
+        verify_transaction(network, &transaction, &state.preparation, &hash)?;
         store
             .record_publication_tx(publisher, &hash, &state.preparation.revision)
             .await?;
@@ -122,7 +126,7 @@ impl PublicationChain<'_> {
         }
         if !same(&receipt["transactionHash"], &hash)
             || !same(&receipt["from"], owner)
-            || !same(&receipt["to"], COLLECTION_MANAGER)
+            || !same(&receipt["to"], network.collection_manager)
         {
             return Err(invalid(
                 "Publication receipt does not match its transaction",
@@ -158,7 +162,7 @@ impl PublicationChain<'_> {
                 store.finish_publication(publisher, &hash, None).await
             }
             status if status == U256::from(1) => {
-                let contract = deployed_collection(&receipt, &state.preparation.salt)?;
+                let contract = deployed_collection(network, &receipt, &state.preparation.salt)?;
                 let block_ref = receipt["blockNumber"].clone();
                 let actual_creator = self.rpc("eth_call", json!([{"to":contract, "data":hex::encode_prefixed(creatorCall {}.abi_encode())}, block_ref])).await?;
                 let bytes = hex::decode(actual_creator.as_str().unwrap_or_default())
@@ -206,10 +210,15 @@ fn quantity(value: &Value) -> Result<U256, ApiError> {
     )
 }
 
-fn verify_transaction(tx: &Value, p: &PublicationPreparation, hash: &str) -> Result<(), ApiError> {
+fn verify_transaction(
+    network: &Network,
+    tx: &Value,
+    p: &PublicationPreparation,
+    hash: &str,
+) -> Result<(), ApiError> {
     if !same(&tx["hash"], hash)
         || !same(&tx["from"], &p.creator)
-        || !same(&tx["to"], COLLECTION_MANAGER)
+        || !same(&tx["to"], network.collection_manager)
         || !same(&tx["input"], &publication_calldata(p)?)
         || quantity(&tx["value"])? != U256::ZERO
     {
@@ -220,7 +229,7 @@ fn verify_transaction(tx: &Value, p: &PublicationPreparation, hash: &str) -> Res
     Ok(())
 }
 
-fn deployed_collection(receipt: &Value, salt: &str) -> Result<String, ApiError> {
+fn deployed_collection(network: &Network, receipt: &Value, salt: &str) -> Result<String, ApiError> {
     let signature = format!("{:#x}", keccak256("ProxyCreated(address,bytes32)"));
     let logs = receipt["logs"]
         .as_array()
@@ -228,7 +237,7 @@ fn deployed_collection(receipt: &Value, salt: &str) -> Result<String, ApiError> 
     let matches: Vec<_> = logs
         .iter()
         .filter(|log| {
-            same(&log["address"], COLLECTION_FACTORY)
+            same(&log["address"], network.collection_factory)
                 && same(&log["topics"][0], &signature)
                 && same(&log["data"], salt)
                 && log["removed"] != true

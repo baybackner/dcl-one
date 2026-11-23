@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::drafts::CollectionDraft;
 use crate::items::ItemsComponent;
-use crate::publication::{COLLECTION_FACTORY, COLLECTION_MANAGER};
+use crate::network::{AMOY, POLYGON};
 use crate::publication_chain::{PublicationChain, publication_calldata};
 use dcl_http::Outbound;
 
@@ -24,7 +24,7 @@ const BLOCK: &str = "0x555555555555555555555555555555555555555555555555555555555
 async fn rpc(State(state): State<Arc<Mutex<Value>>>, Json(req): Json<Value>) -> Json<Value> {
     let s = state.lock().unwrap();
     let result = match req["method"].as_str().unwrap() {
-        "eth_chainId" => json!("0x89"),
+        "eth_chainId" => s.get("chain").cloned().unwrap_or(json!("0x89")),
         "eth_getTransactionByHash" => s["tx"].clone(),
         "eth_getTransactionReceipt" => s["receipt"].clone(),
         "eth_getBlockByNumber" => {
@@ -95,6 +95,104 @@ fn hashes_of(items: &[&Value]) -> Vec<String> {
         .flat_map(|i| i["contents"].as_object().unwrap().values())
         .map(|h| h.as_str().unwrap().to_string())
         .collect()
+}
+
+/// builder-server with `CHAIN_NAME=Sepolia`: the owner's transaction goes to
+/// Amoy's collection manager and the receipt's event comes from Amoy's
+/// factory, over an RPC that answers Amoy; mainnet's contracts or chain
+/// publish nothing.
+#[tokio::test]
+async fn an_amoy_publication_is_verified_against_amoys_contracts_and_chain() {
+    let Some(store) = scratch_component().await else {
+        return;
+    };
+    let store = store.with_network(AMOY);
+    let Draft {
+        collection, item, ..
+    } = draft(&store).await;
+    let id = collection.id;
+    let publisher = || granted::publisher(OWNER, id);
+    let prepared = store.prepare_publication(&publisher()).await.unwrap();
+    store
+        .begin_publication(&publisher(), &prepared.revision)
+        .await
+        .unwrap();
+    let transaction = json!({"hash":HASH, "from":OWNER, "to":AMOY.collection_manager, "value":"0x0",
+        "input":publication_calldata(&prepared).unwrap(), "blockNumber":"0x10", "blockHash":BLOCK});
+    let receipt = json!({"transactionHash":HASH, "from":OWNER, "to":AMOY.collection_manager, "status":"0x1",
+        "blockNumber":"0x10", "blockHash":BLOCK,
+        "logs":[{"address":AMOY.collection_factory, "topics":[format!("{:#x}", keccak256("ProxyCreated(address,bytes32)")),
+            format!("0x{:0>64}", &CONTRACT[2..])], "data":prepared.salt}]});
+    let state = Arc::new(Mutex::new(
+        json!({"chain":"0x13882", "tx":transaction, "receipt":receipt,
+        "finalized":"0x10", "canonical":BLOCK, "creator":OWNER, "count":1}),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let router = Router::new()
+        .route("/", post(rpc))
+        .with_state(state.clone());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let http = Outbound::for_tests();
+    let chain = PublicationChain {
+        http: &http,
+        url: &url,
+    };
+    state.lock().unwrap()["chain"] = json!("0x89");
+    assert_eq!(
+        chain
+            .verify(&store, &publisher(), HASH)
+            .await
+            .unwrap_err()
+            .status(),
+        503,
+        "a Polygon mainnet RPC can't verify an Amoy publication"
+    );
+    state.lock().unwrap()["chain"] = json!("0x13882");
+    for (path, mainnet) in [
+        ("/tx/to", POLYGON.collection_manager),
+        ("/receipt/to", POLYGON.collection_manager),
+        ("/receipt/logs/0/address", POLYGON.collection_factory),
+    ] {
+        let previous = state.lock().unwrap().pointer(path).unwrap().clone();
+        *state.lock().unwrap().pointer_mut(path).unwrap() = json!(mainnet);
+        assert!(
+            chain.verify(&store, &publisher(), HASH).await.is_err(),
+            "accepted mainnet's contract at {path}"
+        );
+        *state.lock().unwrap().pointer_mut(path).unwrap() = previous;
+    }
+    let published = chain.verify(&store, &publisher(), HASH).await.unwrap();
+    assert_eq!(
+        (
+            published.status.as_str(),
+            published.contract_address.as_deref()
+        ),
+        ("published", Some(CONTRACT))
+    );
+    assert_eq!(
+        read_item(&store, item_id(&item)).await.unwrap()["urn"],
+        format!("urn:decentraland:amoy:collections-v2:{CONTRACT}:0")
+    );
+    let stored: (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT i.urn_suffix, c.urn_suffix FROM builder.items i \
+         JOIN builder.collections c ON c.id = i.collection_id WHERE i.id = $1",
+    )
+    .bind(item_id(&item))
+    .fetch_one(store.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        stored,
+        (
+            Some(format!("urn:decentraland:amoy:collections-v2:{CONTRACT}:0")),
+            Some(format!("urn:decentraland:amoy:collections-v2:{CONTRACT}")),
+        )
+    );
+    task.abort();
+    cleanup(&store, &[id], &hashes_of(&[&item])).await;
 }
 
 #[tokio::test]
@@ -206,9 +304,9 @@ async fn frozen_revision_requires_a_matching_finalized_receipt_and_recovers_afte
         .begin_publication(&granted::publisher(OWNER, id), &prepared.revision)
         .await
         .unwrap();
-    let transaction = json!({"hash":HASH, "from":OWNER, "to":COLLECTION_MANAGER, "value":"0x0", "input":publication_calldata(&prepared).unwrap(), "blockNumber":"0x10", "blockHash":BLOCK});
-    let receipt = json!({"transactionHash":HASH, "from":OWNER, "to":COLLECTION_MANAGER, "status":"0x1", "blockNumber":"0x10", "blockHash":BLOCK,
-        "logs":[{"address":COLLECTION_FACTORY, "topics":[format!("{:#x}", keccak256("ProxyCreated(address,bytes32)")), format!("0x{:0>64}", &CONTRACT[2..])], "data":prepared.salt}]});
+    let transaction = json!({"hash":HASH, "from":OWNER, "to":POLYGON.collection_manager, "value":"0x0", "input":publication_calldata(&prepared).unwrap(), "blockNumber":"0x10", "blockHash":BLOCK});
+    let receipt = json!({"transactionHash":HASH, "from":OWNER, "to":POLYGON.collection_manager, "status":"0x1", "blockNumber":"0x10", "blockHash":BLOCK,
+        "logs":[{"address":POLYGON.collection_factory, "topics":[format!("{:#x}", keccak256("ProxyCreated(address,bytes32)")), format!("0x{:0>64}", &CONTRACT[2..])], "data":prepared.salt}]});
     let state = Arc::new(Mutex::new(
         json!({"tx":transaction, "receipt":null, "finalized":"0x10", "canonical":BLOCK, "creator":OWNER, "count":1}),
     ));

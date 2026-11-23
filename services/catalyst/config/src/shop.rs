@@ -209,8 +209,9 @@ pub struct MarketplaceConfig {
     #[arg(long, env = "MARKETPLACE_INDEX_STOP_BLOCK_MATIC")]
     pub marketplace_index_stop_block_matic: Option<u64>,
 
-    /// The chain the trade-events walk of each network reads: its mainnet, or
-    /// its testnet (11155111, 80002) on a stack that trades there.
+    /// The chain the trade-events walk of each network reads, and on Polygon
+    /// the committee walk: its mainnet, or its testnet (11155111, 80002) on a
+    /// stack that trades there.
     #[arg(long, env = "MARKETPLACE_INDEX_CHAIN_ID_ETHEREUM", default_value_t = 1)]
     pub marketplace_index_chain_id_ethereum: i64,
 

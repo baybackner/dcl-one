@@ -99,7 +99,7 @@ impl ItemsComponent {
             .fetch_one(&mut *tx)
             .await?;
         mark_missing_bytes(&self.blobs, &mut snapshot).await?;
-        let preparation = prepare(snapshot, signer)?;
+        let preparation = prepare(snapshot, signer, &self.network)?;
         if preparation.revision != revision {
             return Err(ApiError::http(
                 409,
@@ -256,7 +256,7 @@ impl ItemsComponent {
                     .map_err(|_| ApiError::internal("Invalid saved item id"))?;
                 let changed = sqlx::query("UPDATE builder.items SET is_published=true, blockchain_item_id=$2, urn_suffix=$3, \
                     price=$4, beneficiary=$5, updated_at=timezone('UTC', now()) WHERE id=$1 AND collection_id=$6 AND eth_address=$7 AND NOT is_published")
-                    .bind(item_id).bind(token.to_string()).bind(format!("urn:decentraland:matic:collections-v2:{contract}:{token}"))
+                    .bind(item_id).bind(token.to_string()).bind(self.network.item_urn(contract, &token.to_string()))
                     .bind(&item.price).bind(&item.beneficiary).bind(id).bind(signer).execute(&mut *tx).await?.rows_affected();
                 if changed != 1 {
                     return Err(ApiError::http(
@@ -271,7 +271,7 @@ impl ItemsComponent {
             )
             .bind(id)
             .bind(contract)
-            .bind(format!("urn:decentraland:matic:collections-v2:{contract}"))
+            .bind(self.network.collection_urn(contract))
             .bind(&state.preparation.salt)
             .execute(&mut *tx)
             .await?;

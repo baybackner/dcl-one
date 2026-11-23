@@ -210,14 +210,15 @@ impl Saved {
         }
     }
 
-    /// The item's entity hash under `contract`.
-    pub fn content_hash(&self, contract: &str) -> String {
-        hash::standard(&self.hashed(), contract, &self.blockchain_item_id)
+    /// The item's entity hash under `contract` on `network`.
+    pub fn content_hash(&self, network: &crate::network::Network, contract: &str) -> String {
+        hash::standard(network, &self.hashed(), contract, &self.blockchain_item_id)
     }
 
-    /// The entity metadata the catalyst would receive for the item.
-    pub fn metadata(&self, contract: &str) -> JsJson {
-        hash::standard_metadata(&self.hashed(), contract, &self.blockchain_item_id)
+    /// The entity metadata the catalyst would receive for the item on
+    /// `network`.
+    pub fn metadata(&self, network: &crate::network::Network, contract: &str) -> JsJson {
+        hash::standard_metadata(network, &self.hashed(), contract, &self.blockchain_item_id)
     }
 
     /// The files the item deploys, by path.
@@ -432,7 +433,12 @@ pub(crate) async fn record(
         Some(contract) => saved_items(conn, collection, Some(items))
             .await?
             .iter()
-            .map(|item| (item.id.to_string(), item.content_hash(&contract).into()))
+            .map(|item| {
+                (
+                    item.id.to_string(),
+                    item.content_hash(&state.settings.network, &contract).into(),
+                )
+            })
             .collect(),
         None => serde_json::Map::new(),
     };
@@ -499,7 +505,7 @@ pub(crate) async fn on_changes(
     if !enabled(conn, state).await? {
         return Ok(None);
     }
-    let changed = match changed(conn, view, collection, contract).await? {
+    let changed = match changed(conn, view, &state.settings.network, collection, contract).await? {
         Ok(changed) => changed.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
         Err(notice) => return Ok(Some(notice)),
     };
@@ -521,6 +527,7 @@ pub(crate) async fn on_changes(
 pub(crate) async fn changed(
     conn: &mut PgConnection,
     view: &DecisionView,
+    network: &crate::network::Network,
     collection: Uuid,
     contract: &str,
 ) -> Result<Result<Vec<(Uuid, String)>, Notice>, ApiError> {
@@ -547,7 +554,7 @@ pub(crate) async fn changed(
         .map(|item| {
             (
                 item.id,
-                item.content_hash(contract),
+                item.content_hash(network, contract),
                 &item.blockchain_item_id,
             )
         })

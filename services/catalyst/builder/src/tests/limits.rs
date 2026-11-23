@@ -1483,7 +1483,6 @@ fn the_builder_doc_states_each_bound_the_code_enforces() {
         "access::FILE_PROVIDERS",
         "access::LOCK_HOLDS",
         "chain_state::STALE_AFTER",
-        "cheques::CHAIN_ID",
         "collections::deployment::DEPLOYMENT_TTL",
         "collections::deployment::KEPT_CONTRACTS",
         "kept::FAILURE_TTL",

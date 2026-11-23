@@ -231,7 +231,12 @@ impl ItemRow {
     }
 
     /// The body; `full` keeps what only the item's owner side reads.
-    pub(crate) fn out(self, reached: Reached, full: bool) -> Result<FullItemOut, ApiError> {
+    pub(crate) fn out(
+        self,
+        network: &crate::network::Network,
+        reached: Reached,
+        full: bool,
+    ) -> Result<FullItemOut, ApiError> {
         let third_party = self.third_party();
         let merged = !third_party && self.chain_item_id.is_some();
         let held = match (&self.catalyst_id, third_party) {
@@ -247,10 +252,9 @@ impl ItemRow {
             && self.collection_id.is_some()
             && self.blockchain_item_id.is_some())
         .then(|| {
-            format!(
-                "urn:decentraland:matic:collections-v2:{}:{}",
+            network.item_urn(
                 self.contract_address.as_deref().unwrap_or("null"),
-                self.blockchain_item_id.as_deref().unwrap_or_default()
+                self.blockchain_item_id.as_deref().unwrap_or_default(),
             )
         });
         let item_suffix = self.item_suffix();
@@ -381,7 +385,12 @@ mod tests {
 
     #[test]
     fn a_minted_item_the_copy_holds_takes_the_chain_values_and_keeps_its_documents_in_order() {
-        let body = serde_json::to_string(&row().out(Reached::InList, false).unwrap()).unwrap();
+        let body = serde_json::to_string(
+            &row()
+                .out(&crate::network::POLYGON, Reached::InList, false)
+                .unwrap(),
+        )
+        .unwrap();
         assert!(
             body.contains(r#""data":{"tags":[],"category":"hat"}"#),
             "{body}"
@@ -408,14 +417,34 @@ mod tests {
         r.chain_item_id = None;
         let mut s = row();
         s.chain_item_id = None;
-        let by_id = r.out(Reached::ById, true).unwrap();
+        let by_id = r
+            .out(&crate::network::POLYGON, Reached::ById, true)
+            .unwrap();
         assert_eq!(
             by_id.urn.as_deref(),
             Some("urn:decentraland:matic:collections-v2:0xc0:0")
         );
         assert!(!by_id.is_published);
         assert_eq!(by_id.local_content_hash, Some(Some("bafklocal".into())));
-        assert_eq!(s.out(Reached::InList, true).unwrap().urn, None);
+        assert_eq!(
+            s.out(&crate::network::POLYGON, Reached::InList, true)
+                .unwrap()
+                .urn,
+            None
+        );
+    }
+
+    #[test]
+    fn an_amoy_nodes_minted_item_the_copy_lacks_names_amoy() {
+        let mut r = row();
+        r.chain_item_id = None;
+        assert_eq!(
+            r.out(&crate::network::AMOY, Reached::ById, true)
+                .unwrap()
+                .urn
+                .as_deref(),
+            Some("urn:decentraland:amoy:collections-v2:0xc0:0")
+        );
     }
 
     #[test]
@@ -425,7 +454,9 @@ mod tests {
         r.collection_urn = Some("urn:decentraland:matic:collections-thirdparty:p:c".into());
         r.urn_suffix = Some("urn:decentraland:matic:collections-thirdparty:p:c:hat".into());
         r.mappings = Some(r#"{"mainnet":{}}"#.into());
-        let out = r.out(Reached::ById, true).unwrap();
+        let out = r
+            .out(&crate::network::POLYGON, Reached::ById, true)
+            .unwrap();
         assert_eq!(out.blockchain_item_id.as_deref(), Some("hat"));
         assert_eq!(out.price.as_deref(), Some("0"));
         assert_eq!(out.beneficiary.as_deref(), Some(ZERO_ADDRESS));

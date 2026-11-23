@@ -66,6 +66,7 @@ pub mod http;
 pub mod items;
 pub mod kept;
 pub mod limits;
+pub mod network;
 pub mod onchain;
 pub mod publication;
 pub mod publication_chain;
@@ -153,6 +154,9 @@ impl std::fmt::Debug for WarehouseForward {
 /// The environment as `Config` hands it over.
 #[derive(Clone, Default)]
 pub struct RawSettings {
+    /// `ETH_NETWORK`: the Polygon chain it pairs is the builder's
+    /// ([`network`]); unset is `mainnet`, `ETH_NETWORK`'s default.
+    pub eth_network: Option<String>,
     /// `CREATE_WRITES_ENABLED` (false).
     pub writes_enabled: bool,
     /// `BUILDER_POLYGON_RPC_URL`: the Polygon JSON-RPC that verifies
@@ -210,6 +214,8 @@ pub struct RawSettings {
 
 #[derive(Clone, Default)]
 pub struct Settings {
+    /// The Polygon chain whose contracts, URNs and chain id the builder uses.
+    pub network: network::Network,
     pub writes_enabled: bool,
     pub polygon_rpc_url: Option<String>,
     pub admin_addresses: Vec<String>,
@@ -238,6 +244,7 @@ pub struct Settings {
 impl std::fmt::Debug for Settings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Settings")
+            .field("network", &self.network.chain_id)
             .field("writes_enabled", &self.writes_enabled)
             .field("polygon_rpc_url", &self.polygon_rpc_url.is_some())
             .field("admin_addresses", &self.admin_addresses)
@@ -308,6 +315,12 @@ impl Settings {
     /// can't use safely (an invalid or unsafe endpoint, a malformed id) is
     /// an error.
     pub fn parse(raw: RawSettings) -> anyhow::Result<Self> {
+        let network = match raw.eth_network.as_deref() {
+            None => network::POLYGON,
+            Some(name) => network::for_eth_network(name).with_context(|| {
+                format!("ETH_NETWORK={name} has no builder contracts (mainnet|sepolia)")
+            })?,
+        };
         let polygon_rpc_url = non_empty(&raw.polygon_rpc_url);
         if let Some(url) = &polygon_rpc_url {
             let parsed = url::Url::parse(url)
@@ -422,6 +435,7 @@ impl Settings {
             bail!("BUILDER_VIDEO_UPLOADS_MAX must be 1 to {MAX_VIDEO_UPLOADS_SETTING}");
         }
         Ok(Self {
+            network,
             cors,
             unpublished_max_bytes: raw.unpublished_max_bytes,
             unpublished_max_files: raw.unpublished_max_files,
@@ -523,7 +537,9 @@ impl State {
             );
         }
         Ok(Self {
-            items: ItemsComponent::new(pool.clone(), blobs).with_denylist(denylist.clone()),
+            items: ItemsComponent::new(pool.clone(), blobs)
+                .with_denylist(denylist.clone())
+                .with_network(settings.network),
             market,
             settings,
             http,
@@ -552,7 +568,8 @@ impl State {
     /// What `serve` logs at startup.
     pub fn sources_label(&self) -> String {
         format!(
-            "polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={} forum={} validator={}",
+            "polygon_chain={} polygon_rpc={} collections_reader={} admins={} newsletter={} warehouse={} slack={} forum={} validator={}",
+            self.settings.network.chain_id,
             self.settings.polygon_rpc_url.is_some(),
             onchain::configured(self.market.as_deref()),
             self.settings.admin_addresses.len(),

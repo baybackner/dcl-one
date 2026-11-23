@@ -1988,6 +1988,7 @@ async fn chain_subgraphs(seed: &Seed) -> (String, String) {
         .map(|r| {
             serde_json::json!({
                 "id": format!("0x{}", hex::encode(catalyst_builder::cheques::digest(
+                    &catalyst_builder::network::POLYGON,
                     &r.provider,
                     r.qty,
                     r.salt.parse().expect("seed.json receipt salt"),

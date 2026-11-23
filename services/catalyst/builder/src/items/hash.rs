@@ -124,9 +124,14 @@ fn js_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// The entity metadata the catalyst would receive for a minted standard
-/// item (builder-server's `buildEntityMetadata`).
-pub(crate) fn standard_metadata(item: &Hashed, contract: &str, blockchain_item_id: &str) -> JsJson {
-    let id = format!("urn:decentraland:matic:collections-v2:{contract}:{blockchain_item_id}");
+/// item on `network` (builder-server's `buildEntityMetadata`).
+pub(crate) fn standard_metadata(
+    network: &crate::network::Network,
+    item: &Hashed,
+    contract: &str,
+    blockchain_item_id: &str,
+) -> JsJson {
+    let id = network.item_urn(contract, blockchain_item_id);
     let mut metadata = head(item, &id, Some(contract));
     match item.item_type {
         ItemType::Emote => {
@@ -150,9 +155,15 @@ pub(crate) fn deployed_files<'a>(item: &'a Hashed) -> impl Iterator<Item = &'a (
     item.contents.iter().filter(|(file, _)| file != VIDEO_PATH)
 }
 
-/// The CID of a minted standard item's files and metadata (ADR-32).
-pub(crate) fn standard(item: &Hashed, contract: &str, blockchain_item_id: &str) -> String {
-    let metadata = standard_metadata(item, contract, blockchain_item_id);
+/// The CID of a minted standard item's files and metadata on `network`
+/// (ADR-32).
+pub(crate) fn standard(
+    network: &crate::network::Network,
+    item: &Hashed,
+    contract: &str,
+    blockchain_item_id: &str,
+) -> String {
+    let metadata = standard_metadata(network, item, contract, blockchain_item_id);
     let mut files: Vec<&(String, String)> = deployed_files(item).collect();
     files.sort_by(|(fa, ha), (fb, hb)| js_cmp(ha, hb).then_with(|| js_cmp(fa, fb)));
     let content = JsJson::Array(
@@ -193,4 +204,62 @@ pub(crate) fn third_party(item: &Hashed, urn: &str) -> String {
     hex::encode(alloy_primitives::keccak256(
         js_stringify(&JsJson::Object(metadata)).as_bytes(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::{AMOY, POLYGON};
+
+    /// builder-server's `hashes.spec.ts` standard wearable: its expected hash
+    /// is the one it computes on Sepolia (the checkout's `CHAIN_NAME`), and
+    /// the mainnet one is what the same code computes on `Ethereum Mainnet`.
+    #[test]
+    fn a_minted_items_hash_names_the_networks_urn_as_builder_server_does() {
+        let data: JsJson = serde_json::from_str(
+            r#"{"replaces":["earring"],"hides":["eyewear"],"tags":[],"category":"earring",
+            "representations":[{"bodyShapes":["urn:decentraland:off-chain:base-avatars:BaseMale"],
+            "mainFile":"male/F_3LAU_Hat_Blue.glb","contents":["male/F_3LAU_Hat_Blue.glb"],
+            "overrideHides":["eyewear"],"overrideReplaces":["earring"]}]}"#,
+        )
+        .unwrap();
+        let metrics: JsJson = serde_json::from_str(
+            r#"{"triangles":468,"materials":2,"textures":2,"meshes":1,"bodies":2,"entities":1}"#,
+        )
+        .unwrap();
+        let contents = [
+            (
+                "thumbnail.png",
+                "QmeSfHFqSk73esyE5ZsW4yRqWsr5eJ8vXLx7v7L2dsXTmM",
+            ),
+            (
+                "male/F_3LAU_Hat_Blue.glb",
+                "Qmf7dnGi5fyF9AwdJGzVnFCUUGBB8w2mW1v6AZAWh7rJVd",
+            ),
+            (
+                "image.png",
+                "QmXga5BnDE16XR6UH5Tgw3rDNLgA1RN8PkGZWpw7aQsUyN",
+            ),
+        ]
+        .map(|(file, hash)| (file.to_string(), hash.to_string()));
+        let item = Hashed {
+            name: "F 3LAU Hat Blue",
+            description: Some(""),
+            rarity: Some(Some("unique")),
+            item_type: ItemType::Wearable,
+            data: &data,
+            metrics: &metrics,
+            contents: &contents,
+            mappings: None,
+        };
+        let contract = "0x6319d66715faf411f8c37a2f5858e0bce90da5ae";
+        assert_eq!(
+            standard(&AMOY, &item, contract, "0"),
+            "bafkreigblh3xd4r57xvpvokhyhzydmmb5wt6ri7tyf25hpm7flknjkyqma"
+        );
+        assert_eq!(
+            standard(&POLYGON, &item, contract, "0"),
+            "bafkreihav73zvqoxx32g2v7q4alu5o6q25ilgb4l34umist5mpifk3xole"
+        );
+    }
 }

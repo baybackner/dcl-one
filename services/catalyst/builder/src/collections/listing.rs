@@ -736,9 +736,13 @@ impl OwnListing {
     }
 }
 
-fn listing_row(r: ListedRow, programmatic: Option<bool>) -> CollectionListingRowOut {
+fn listing_row(
+    network: &crate::network::Network,
+    r: ListedRow,
+    programmatic: Option<bool>,
+) -> CollectionListingRowOut {
     CollectionListingRowOut {
-        collection: r.collection.out(programmatic),
+        collection: r.collection.out(network, programmatic),
         curation_status: r.curation_status,
         last_activity_at: crate::http::iso(&r.last_activity_at.and_utc()),
     }
@@ -748,6 +752,7 @@ fn listing_row(r: ListedRow, programmatic: Option<bool>) -> CollectionListingRow
 /// carries the provider's `is_programmatic`, so a page that holds one reads
 /// the registry after its rows, with no connection held.
 async fn programmatic_rows(
+    network: &crate::network::Network,
     rows: Vec<ListedRow>,
     third_parties: &ThirdParties,
     market: Option<&Arc<ChainIndex>>,
@@ -765,7 +770,7 @@ async fn programmatic_rows(
                 .zip(registry.as_deref())
                 .and_then(|(id, registry)| provider(registry, id))
                 .map(|p| p.is_programmatic);
-            listing_row(r, programmatic)
+            listing_row(network, r, programmatic)
         })
         .collect())
 }
@@ -887,7 +892,7 @@ impl ItemsComponent {
         market: Option<&Arc<ChainIndex>>,
     ) -> Result<Value, ApiError> {
         let (rows, total, _) = self.list(&request.listing, true).await?;
-        let results = programmatic_rows(rows, third_parties, market).await?;
+        let results = programmatic_rows(&self.network, rows, third_parties, market).await?;
         Self::envelope(&request.listing, results, total, None)
     }
 
@@ -901,7 +906,7 @@ impl ItemsComponent {
         market: Option<&Arc<ChainIndex>>,
     ) -> Result<Value, ApiError> {
         let (rows, total, _) = self.list(&search.listing, true).await?;
-        let results: Vec<Value> = programmatic_rows(rows, third_parties, market)
+        let results: Vec<Value> = programmatic_rows(&self.network, rows, third_parties, market)
             .await?
             .into_iter()
             .map(|r| project(r, Some(PUBLIC_LISTING)))
@@ -933,7 +938,7 @@ impl ItemsComponent {
                     .collection
                     .provider()
                     .map(|id| request.programmatic.get(id).copied().unwrap_or(false));
-                listing_row(r, programmatic)
+                listing_row(&self.network, r, programmatic)
             })
             .collect();
         Self::envelope(&request.listing, results, total, counts)

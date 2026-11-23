@@ -98,7 +98,7 @@ pub async fn approval_data(state: &State, read: &ApprovalRead) -> Result<Approva
     .bind(&provider)
     .fetch_one(state.items.pool())
     .await?;
-    let receipt = cheques::receipt_id(&cheque_provider, &cheque)
+    let receipt = cheques::receipt_id(&state.settings.network, &cheque_provider, &cheque)
         .ok_or_else(|| ApiError::internal(format!("stored cheque of {id} unreadable")))?;
     let registry = state
         .third_parties
