@@ -171,12 +171,31 @@ describe("chat's /goto", () => {
     act(() => h.driver.emit({ kind: 'travelResult', travelId: 3, realm: DEFAULT_REALM, ok: true }))
     expect(systemLines(h).at(-1)).toBe('🟢 Welcome to Genesis City!')
 
-    // on the way to a world a parcel alone is Genesis City's, and the world's own is one of its
+    // on the way to a world its own parcel is that travel again, and a parcel alone is Genesis City's
     act(() => h.session().chat.send('/goto mana'))
     act(() => h.session().chat.send('/goto mana/3,4'))
-    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', x: 3, y: 4, travelId: -1 }])
+    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: 'mana.dcl.eth', x: 3, y: 4, travelId: 5 }])
     act(() => h.session().chat.send('/goto 10,20'))
-    expect(h.driver.sentOf('teleport')[1]).toEqual({ kind: 'teleport', realm: DEFAULT_REALM, x: 10, y: 20, travelId: 5 })
+    expect(h.driver.sentOf('teleport')[1]).toEqual({ kind: 'teleport', realm: DEFAULT_REALM, x: 10, y: 20, travelId: 6 })
+  })
+
+  it('to a place inside the realm travelled to is that travel again, so one that fails moves nobody', async () => {
+    const h = renderSession()
+    await enterAsGuest(h)
+    inGenesis(h)
+    act(() => h.session().chat.send('/goto nosuchworld'))
+    act(() => h.session().chat.send('/goto nosuchworld/3,4'))
+    // nothing is asked of the realm being left
+    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: 'nosuchworld.dcl.eth', x: 3, y: 4, travelId: 3 }])
+    act(() => h.driver.emit({ kind: 'travelResult', travelId: 3, realm: 'nosuchworld.dcl.eth', ok: false, message: 'status: 404 Not Found' }))
+    expect(systemLines(h)).toEqual([CANCELED, "🔴 Error: The world nosuchworld doesn't exist or not reachable!"])
+
+    // /goto-local too: it answers as a teleport once the realm is entered
+    act(() => h.session().chat.send('/goto mana'))
+    act(() => h.session().chat.send('/goto-local 5,6'))
+    expect(h.driver.sentOf('teleport')[1]).toEqual({ kind: 'teleport', realm: 'mana.dcl.eth', x: 5, y: 6, travelId: 5 })
+    act(() => h.driver.emit({ kind: 'travelResult', travelId: 5, realm: 'mana.dcl.eth', ok: true }))
+    expect(systemLines(h).at(-1)).toBe('🟢 You teleported to 5,6.')
   })
 
   it('on the way to an address that tells no kind, the realm is of no known kind', async () => {
@@ -219,6 +238,43 @@ describe("chat's /goto", () => {
       })
       expect(h.driver.sentOf('teleport')).toEqual([])
       expect(systemLines(h)).toEqual(before)
+    } finally {
+      fetched.mockRestore()
+    }
+  })
+
+  it('crowd answered after a later /goto gives way to it', async () => {
+    const h = renderSession()
+    await enterAsGuest(h)
+    let answer: (response: Response) => void = () => undefined
+    let refuse: (reason: Error) => void = () => undefined
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve, reject) => {
+          answer = resolve
+          refuse = reject
+        })
+    )
+    // past every step of the read
+    const settled = (): Promise<void> => act(async () => new Promise<void>((resolve) => setTimeout(resolve)))
+    try {
+      act(() => h.session().chat.send('/goto crowd'))
+      act(() => h.session().chat.send('/goto boedo'))
+      answer(new Response(JSON.stringify([{ baseCoords: [5, 6] }])))
+      await settled()
+      expect(h.driver.sentOf('teleport')).toEqual([])
+      expect(h.driver.sentOf('changeRealm')).toEqual([{ kind: 'changeRealm', realm: 'boedo.dcl.eth', travelId: 2 }])
+      expect(h.session().travellingTo).toBe('boedo.dcl.eth')
+      expect(systemLines(h)).toEqual([])
+
+      // one that cannot be read either: the later command has nothing to hear of it
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      act(() => h.session().chat.send('/goto crowd'))
+      act(() => h.session().chat.send('/goto 200,200'))
+      const lines = systemLines(h)
+      refuse(new Error('offline'))
+      await settled()
+      expect(systemLines(h)).toEqual(lines)
     } finally {
       fetched.mockRestore()
     }

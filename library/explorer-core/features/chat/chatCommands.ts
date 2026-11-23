@@ -163,6 +163,9 @@ export interface GotoHere {
   /** The world's name (`name.dcl.eth`, lowercase) in a world; null anywhere else. */
   realm: string | null
   parcel: { x: number; y: number }
+  /** The address a travel under way is headed to, which `kind` and `realm` then describe: the
+   *  player has yet to enter that realm. Null when no travel is under way. */
+  heading: string | null
 }
 
 /** What a `/goto` asks of the engine, or the line to answer with instead. `reply` is the answer
@@ -184,7 +187,9 @@ const REALM_URL = /^https?:\/\//i
  * In a realm of any other kind it is a parcel of that realm: a scene preview refuses realm changes,
  * and its parcels are the creator's own. A world the player is already in is a teleport inside it.
  * `genesisRealm` is the Genesis City realm's address. `random` and `crowd` come with the parcel the
- * caller picked for them, which is Genesis City's from any realm.
+ * caller picked for them, which is Genesis City's from any realm. During a travel the realm is the
+ * one travelled to, and a place inside it is asked of that travel again, as its landing: the
+ * engine moves nobody when a travel fails.
  */
 export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, genesisRealm: string): GotoPlan {
   const spawnPoint = target.spawnPoint ?? undefined
@@ -197,6 +202,7 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
     const inside = here.kind === 'genesis' || toGenesis ? inGenesis(parcel) : here.kind === 'other' || inWorld(parcel)
     if (target.parcel != null && !inside) return outside(parcel)
     if (toGenesis) return { kind: 'travel', realm: genesisRealm, parcel, spawnPoint, reply: teleported(parcel) }
+    if (here.heading != null) return { kind: 'travel', realm: here.heading, parcel, spawnPoint, reply: teleported(parcel) }
     return { kind: 'teleport', ...parcel, spawnPoint, reply: teleported(parcel) }
   }
 
@@ -213,8 +219,10 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
   const there = toGenesis ? here.kind === 'genesis' : here.kind === 'world' && here.realm === worldOfRealm(realm)
   if (there) {
     if (target.parcel == null && spawnPoint == null) return { kind: 'reply', message: `🟡 You are already in ${name}!` }
-    const parcel = target.parcel ?? here.parcel
-    return { kind: 'teleport', ...parcel, spawnPoint, reply: teleported(parcel) }
+    if (here.heading == null) {
+      const parcel = target.parcel ?? here.parcel
+      return { kind: 'teleport', ...parcel, spawnPoint, reply: teleported(parcel) }
+    }
   }
   const world = toGenesis || url ? undefined : name
   const reply = world != null ? `🟢 Welcome to the ${world} world!` : `🟢 Welcome to ${toGenesis ? 'Genesis City' : name}!`

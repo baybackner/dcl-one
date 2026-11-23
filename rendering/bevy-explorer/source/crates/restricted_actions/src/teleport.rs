@@ -164,7 +164,7 @@ pub fn teleport_player(
             continue;
         }
 
-        // Neither: already answered above (a system request without a scene is never built that way).
+        // Neither: a scene's request was answered above; a system request may name neither.
         let Some(to) = to else {
             response.send(Err("teleport needs a parcel or a realm".to_owned()));
             continue;

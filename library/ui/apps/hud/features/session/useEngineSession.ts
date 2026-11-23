@@ -1424,6 +1424,8 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
   // next is asked for has lost its answer (the bridge scene started again).
   const gotoReplies = useRef(new Map<number, { ok: string; failed: (reason: string) => string }>())
   const gotoTeleportSeq = useRef(0)
+  // Counts the /goto commands typed: one that waits to learn its parcel gives way to a later one.
+  const gotoSeq = useRef(0)
   const pushSystemMessageRef = useRef<(message: string) => void>(() => undefined)
   const [travelError, setTravelError] = useState<string | null>(null)
   const [platformBan, setPlatformBan] = useState<PlatformBanNotice | null>(null)
@@ -2942,7 +2944,7 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
   // engine, and the command's answer is posted when that request ends.
   // Genesis City advertises its map and a world goes by its name; any other realm (a scene
   // preview, a realm of its own, one not reported yet) is neither.
-  const hereRef = useRef<GotoHere>({ kind: 'other', realm: null, parcel: mapParcel })
+  const hereRef = useRef<GotoHere>({ kind: 'other', realm: null, parcel: mapParcel, heading: null })
   // During a travel and right after it the realm is the one travelled to, whatever the last report
   // says, when its address tells its kind: Genesis City's own, or a world's. Any other address
   // says nothing (Genesis City is reached by more than one): the reports decide once the travel has
@@ -2953,7 +2955,7 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
   const reported = headed == null && travellingTo == null
   const world = headed === 'world' ? headedWorld : reported ? worldOfRealm(realmName ?? '') : null
   const genesis = headed != null ? headed === 'genesis' : reported && isGenesisSatelliteView(satelliteView)
-  hereRef.current = { kind: genesis ? 'genesis' : world != null ? 'world' : 'other', realm: world, parcel: mapParcel }
+  hereRef.current = { kind: genesis ? 'genesis' : world != null ? 'world' : 'other', realm: world, parcel: mapParcel, heading: travellingTo }
   const goto = useCallback(
     async (target: GotoTarget, local: boolean) => {
       // no engine to ask: nothing would answer
@@ -2961,18 +2963,21 @@ export function useEngineSession(createDriver: () => LoginDriver, host: SessionH
         pushSystemMessage('🔴 Error running command.')
         return
       }
+      const asked = ++gotoSeq.current
       let destination = target
       if (target.random || target.crowd) {
         const signOut = signOuts.current
+        // signed out while the busiest scene was read: the command is that session's. Another
+        // /goto typed meanwhile: the later one is where the player means to go
+        const stale = (): boolean => signOuts.current !== signOut || gotoSeq.current !== asked
         try {
           destination = { ...target, parcel: target.random ? randomParcel() : await fetchCrowd() }
         } catch (e) {
           console.warn('[chat] /goto crowd', e)
-          if (signOuts.current === signOut) pushSystemMessage('🔴 Error running command.')
+          if (!stale()) pushSystemMessage('🔴 Error running command.')
           return
         }
-        // signed out while the busiest scene was read: the command is that session's
-        if (signOuts.current !== signOut) return
+        if (stale()) return
       }
       const plan = resolveGoto(destination, local, hereRef.current, DEFAULT_REALM)
       if (plan.kind === 'reply') {

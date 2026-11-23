@@ -926,6 +926,8 @@ pub fn change_realm(
             for request in change_realm_requests.read() {
                 request.response.send(Err(DISABLED.to_owned()));
             }
+            // as for a change that failed: the landing asked for is not kept for a later change
+            *target = RealmInitialLocation::None;
         } else {
             let mut requests = change_realm_requests.read().collect::<Vec<_>>();
             let request = requests.pop().unwrap();

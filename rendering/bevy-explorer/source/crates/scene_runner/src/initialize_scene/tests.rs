@@ -853,12 +853,10 @@ fn a_realm_change_without_a_target_puts_a_player_in_the_world_out_of_it() {
     assert_eq!(landing_position(&app, player), None);
 }
 
-// A realm change that fails keeps the player in the realm they are in, and gives up the landing
-// it was to make: the next realm change does not land on its parcel or its spawn point.
-#[test]
-fn a_realm_change_that_fails_leaves_no_landing_for_the_next_one() {
+/// `realm_app` with realm changes asked for through `ipfs::change_realm`, and its player in the
+/// world of a realm that answered.
+fn realm_app_taking_changes() -> (App, Entity) {
     use bevy_console::PrintConsoleLine;
-    use common::rpc::RpcResultSender;
     use ipfs::{world_access::WorldCommsSecret, ChangeRealmEvent, IpfsResource, ServerAbout};
 
     let (mut app, player) = realm_app(RealmInitialLocation::None);
@@ -866,7 +864,6 @@ fn a_realm_change_that_fails_leaves_no_landing_for_the_next_one() {
         .add_event::<PrintConsoleLine>()
         .init_resource::<WorldCommsSecret>()
         .add_systems(Update, ipfs::change_realm);
-    // the realm the player is in, and in its world
     app.world()
         .resource::<IpfsResource>()
         .set_realm_about(ServerAbout::default());
@@ -874,23 +871,41 @@ fn a_realm_change_that_fails_leaves_no_landing_for_the_next_one() {
         !app.world().resource::<CurrentRealm>().about_url.is_empty()
     });
     app.world_mut().entity_mut(player).remove::<OutOfWorld>();
+    (app, player)
+}
 
-    // a teleport to a realm that does not answer: nothing listens on this port
-    let closed = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap();
+/// A teleport to parcel 3,4 of `realm`, on the spawn point `door`, as `teleport_player` asks for
+/// it. Returns where the realm change answers.
+fn teleport_to_realm(
+    app: &mut App,
+    realm: String,
+) -> common::rpc::RpcResultReceiver<Result<(), String>> {
     *app.world_mut().resource_mut::<RealmInitialLocation>() = RealmInitialLocation::Parcel {
         parcel: IVec2::new(3, 4),
         spawn_point: door(),
     };
-    let (response, mut answer) = RpcResultSender::channel();
-    app.world_mut().send_event(ChangeRealmEvent {
-        new_realm: format!("http://{closed}"),
+    let (response, answer) = common::rpc::RpcResultSender::channel();
+    app.world_mut().send_event(ipfs::ChangeRealmEvent {
+        new_realm: realm,
         content_server_override: None,
         response,
         report: false,
     });
+    answer
+}
+
+// A realm change that fails keeps the player in the realm they are in, and gives up the landing
+// it was to make: the next realm change does not land on its parcel or its spawn point.
+#[test]
+fn a_realm_change_that_fails_leaves_no_landing_for_the_next_one() {
+    let (mut app, player) = realm_app_taking_changes();
+
+    // a realm that does not answer: nothing listens on this port
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let mut answer = teleport_to_realm(&mut app, format!("http://{closed}"));
     run_until(&mut app, |app| {
         *landing_target(app) == RealmInitialLocation::None
     });
@@ -898,6 +913,26 @@ fn a_realm_change_that_fails_leaves_no_landing_for_the_next_one() {
     assert!(matches!(answer.try_recv(), Ok(Err(_))));
     assert_eq!(landing_spawn_point(&app, player), None);
     assert_eq!(landing_position(&app, player), None);
+
+    change_realm_to(&mut app, live_realm(&[], None));
+
+    assert_eq!(landing_spawn_point(&app, player), Some(None));
+    assert_eq!(landing_position(&app, player), None);
+}
+
+// A scene preview refuses every realm change, and gives up the landing as a change that failed
+// does.
+#[test]
+fn a_realm_change_refused_in_a_preview_leaves_no_landing_for_the_next_one() {
+    let (mut app, player) = realm_app_taking_changes();
+    app.world_mut().resource_mut::<PreviewMode>().is_preview = true;
+
+    let mut answer = teleport_to_realm(&mut app, "mana.dcl.eth".to_owned());
+    app.update();
+
+    assert!(matches!(answer.try_recv(), Ok(Err(_))));
+    assert_eq!(*landing_target(&app), RealmInitialLocation::None);
+    assert_eq!(landing_spawn_point(&app, player), None);
 
     change_realm_to(&mut app, live_realm(&[], None));
 

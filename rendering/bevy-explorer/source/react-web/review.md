@@ -192,7 +192,10 @@ tag (name, badges, distance, opacity, scale) and `/nametag_bubble` shows a test 
       bad destination at once. In a scene preview `/goto x,y` moves inside the preview, and
       `random` and `crowd` answer the engine's refusal to change realm. A `/goto` typed while a
       travel is under way is read against the realm travelled to; a travel it replaces answers
-      `🔴 Error: The operation was canceled!`. A destination ending in `/name` lands on the scene's
+      `🔴 Error: The operation was canceled!`. A place inside the realm travelled to
+      (`/goto world/x,y` on the way to that world, `/goto-local x,y`) is that travel asked for
+      again, so a travel that fails moves nobody. A `/goto crowd` still reading the busiest scene
+      gives way to a `/goto` typed after it. A destination ending in `/name` lands on the scene's
       spawn point of that name (the debug panel's Teleport section shows the name looked for and
       whether the scene had it). Tests: `library/ui/apps/hud/test/hosted/chatGoto.test.tsx` (the
       session), `library/explorer-core/features/chat/chatCommands.test.ts` (the destinations),
