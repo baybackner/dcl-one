@@ -48,12 +48,26 @@ struct FakeBot {
     /// While set, `publish_data` waits for it, and `publish_waiting` is set.
     publish_gate: Mutex<Option<Arc<tokio::sync::Notify>>>,
     publish_waiting: AtomicBool,
+    /// The track and each data message, stamped from [`ORDER`] so that the
+    /// output of several bots can be put in one order.
+    stamps: Mutex<Vec<(u64, Value)>>,
+}
+
+/// One clock for every fake bot's [`FakeBot::stamps`].
+static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl FakeBot {
+    fn stamp(&self, message: Value) {
+        let at = ORDER.fetch_add(1, Ordering::SeqCst);
+        self.stamps.lock().unwrap().push((at, message));
+    }
 }
 
 #[async_trait::async_trait]
 impl BotLink for FakeBot {
     async fn publish_video(&self, w: u32, h: u32) -> anyhow::Result<()> {
         self.sent.lock().unwrap().push(Sent::PublishVideo(w, h));
+        self.stamp(json!({"type": "track"}));
         Ok(())
     }
     async fn push_frame(&self, frame: &Frame) -> anyhow::Result<()> {
@@ -71,6 +85,9 @@ impl BotLink for FakeBot {
             gate.notified().await;
         }
         anyhow::ensure!(!self.exited.load(Ordering::SeqCst), "bot exited");
+        if let Some(incoming) = decode_packet(&packet) {
+            self.stamp(Value::Object(incoming.message));
+        }
         self.sent.lock().unwrap().push(Sent::Data(packet));
         let hook = self.on_first_data.lock().unwrap().take();
         if let Some(hook) = hook {
@@ -1421,11 +1438,14 @@ async fn a_replaced_bot_holds_its_slot_until_it_shut_down() {
 }
 
 /// A creation replaced while it waits for its own predecessor's stop sends
-/// no state: A, reserved in an empty room, replaces P when admitted and
-/// waits for P's stop; B replaces A meanwhile and goes live. Once P's stop
-/// is out, A says nothing, so clients end on B.
+/// no state, and its successor waits for that predecessor too: A, reserved
+/// in an empty room, replaces P when admitted and waits for P's stop, which
+/// stalls; B replaces A meanwhile. B publishes its track and state only once
+/// P's and A's stops are out, and A says nothing. A client that takes the
+/// last message it got, as the Admin Toolkit did before it checked ids,
+/// ends on B.
 #[tokio::test]
-async fn a_creation_replaced_while_it_waits_sends_no_state() {
+async fn a_new_presentation_waits_for_every_earlier_stop_of_its_room() {
     let launcher = FakeLauncher::new(json!({}));
     let presenter = Presenter::new(launcher.clone(), target(), 3, None);
     presenter.set_room_service(TestRooms::offline());
@@ -1448,23 +1468,97 @@ async fn a_creation_replaced_while_it_waits_sends_no_state() {
     });
     settle_until(|| p_bot.publish_waiting.load(Ordering::SeqCst)).await;
     let (a_bot, _) = launcher.last();
-    let b = presenter
-        .create(test_pdf(1), &bot_token("access:b"), "b.pdf", None)
-        .await
-        .unwrap();
+    let creating_b = tokio::spawn({
+        let presenter = presenter.clone();
+        async move {
+            let token = bot_token("access:b");
+            presenter.create(test_pdf(1), &token, "b.pdf", None).await
+        }
+    });
+    settle_until(|| {
+        launcher.bots.lock().unwrap().len() == 3
+            && a_bot.sent.lock().unwrap().contains(&Sent::Shutdown)
+    })
+    .await;
     let (b_bot, _) = launcher.last();
-    settle_until(|| a_bot.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    // P's stop still stalls: B has published nothing.
+    assert!(b_bot.stamps.lock().unwrap().is_empty());
     gate.notify_one();
     let a = creating_a.await.unwrap().unwrap();
+    let b = creating_b.await.unwrap().unwrap();
     settle().await;
+
     let a_messages: Vec<Value> = data_messages(&a_bot).into_iter().map(|m| m.0).collect();
     assert_eq!(
         a_messages,
         [json!({"type": "presentation:stopped", "id": a.id})]
     );
+    // Every message of the room, in the order the bots sent them.
+    let mut room: Vec<(u64, String)> = [("P", &p_bot), ("A", &a_bot), ("B", &b_bot)]
+        .iter()
+        .flat_map(|(name, bot)| {
+            let stamps = bot.stamps.lock().unwrap().clone();
+            stamps
+                .into_iter()
+                .map(move |(at, m)| (at, format!("{name} {}", m["type"].as_str().unwrap())))
+        })
+        .collect();
+    room.sort_by_key(|(at, _)| *at);
+    let room: Vec<String> = room.into_iter().map(|(_, m)| m).collect();
+    assert_eq!(
+        room,
+        [
+            "P track",
+            "P presentation:state",
+            "A track",
+            "A presentation:stopped",
+            "P presentation:stopped",
+            "B track",
+            "B presentation:state",
+        ]
+    );
     assert_eq!(states(&b_bot).first().unwrap()["id"], b.id);
     assert_eq!(presenter.active_sessions(), 1);
     assert!(!b_bot.sent.lock().unwrap().contains(&Sent::Shutdown));
+}
+
+/// A presentation stopped by its presenter ends before the next one of its
+/// room appears, though no new share replaced it: the next share waits for
+/// a stop that stalls.
+#[tokio::test]
+async fn a_new_presentation_waits_for_a_stop_in_progress() {
+    let launcher = FakeLauncher::new(json!({}));
+    let presenter = Presenter::new(launcher.clone(), target(), 3, None);
+    presenter.set_room_service(TestRooms::offline());
+    let first = presenter
+        .create(test_pdf(1), &bot_token("access:1"), "a.pdf", None)
+        .await
+        .unwrap();
+    let (first_bot, _) = launcher.last();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *first_bot.publish_gate.lock().unwrap() = Some(gate.clone());
+    let stopping = tokio::spawn({
+        let presenter = presenter.clone();
+        let id = first.id.clone();
+        async move { presenter.stop(&id).await }
+    });
+    settle_until(|| first_bot.publish_waiting.load(Ordering::SeqCst)).await;
+    let creating = tokio::spawn({
+        let presenter = presenter.clone();
+        async move {
+            let token = bot_token("access:2");
+            presenter.create(test_pdf(1), &token, "b.pdf", None).await
+        }
+    });
+    settle_until(|| launcher.bots.lock().unwrap().len() == 2).await;
+    let (second_bot, _) = launcher.last();
+    assert!(second_bot.stamps.lock().unwrap().is_empty());
+    gate.notify_one();
+    stopping.await.unwrap();
+    creating.await.unwrap().unwrap();
+    let stopped = first_bot.stamps.lock().unwrap().last().unwrap().0;
+    let track = second_bot.stamps.lock().unwrap().first().unwrap().0;
+    assert!(stopped < track);
 }
 
 /// A bot token of a revoked or rotated Cast credential, still signed and
