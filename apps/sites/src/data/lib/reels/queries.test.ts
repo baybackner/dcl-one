@@ -10,6 +10,7 @@ const CONTRACT = "0x1111111111111111111111111111111111111111";
 const ID = `${CONTRACT}-0`;
 const ASSET = `urn:decentraland:matic:collections-v2:${CONTRACT}:0`;
 const TOKEN = `${ASSET}:603`;
+const ETHEREUM = `urn:decentraland:ethereum:collections-v2:${CONTRACT}:0`;
 const LEGACY = `urn:decentraland:mainnet:collections-v2:${CONTRACT}:0`;
 const UNRESOLVED = { id: "unavailable", label: "Some collectible details are unavailable." };
 const HAT = {
@@ -52,6 +53,13 @@ describe("Reels wearable lookups", () => {
     });
   });
 
+  describe("when the photo uses the Ethereum chain name", () => {
+    it("should resolve the same Ethereum catalog item as the historical alias", () => {
+      expect(wearableRef(ETHEREUM)).toEqual(wearableRef(LEGACY));
+      expect(wearableRef(ETHEREUM)?.key).toBe(`1:${ID}`);
+    });
+  });
+
   describe("when the catalogue has partial or inconsistent data", () => {
     it("should keep resolved items and a text fallback for unavailable items", async () => {
       const fetch = vi.fn(async (href: string) => {
@@ -68,7 +76,7 @@ describe("Reels wearable lookups", () => {
       });
       vi.stubGlobal("fetch", fetch);
       const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      const urns = [ASSET, TOKEN, LEGACY, "urn:decentraland:off-chain:base-avatars:tshirt"];
+      const urns = [ASSET, TOKEN, ETHEREUM, LEGACY, "urn:decentraland:off-chain:base-avatars:tshirt"];
       const items = await client.fetchQuery(reelWearablesQuery(urns));
       expect(fetch).toHaveBeenCalledTimes(2);
       expect(reelWearables(urns, items)).toEqual([

@@ -10,7 +10,7 @@ import { loadWorldPlace, resolveLegacyPlace } from "@/data/lib/catalyst/places/d
 const STALE_MS = 60_000;
 const MAX_ITEMS = 100;
 const NETWORKS = {
-  mainnet: { network: "ETHEREUM", chainId: CHAIN.ETHEREUM },
+  ethereum: { network: "ETHEREUM", chainId: CHAIN.ETHEREUM },
   matic: { network: "MATIC", chainId: CHAIN.POLYGON },
 } as const;
 
@@ -18,14 +18,13 @@ type Network = (typeof NETWORKS)[keyof typeof NETWORKS];
 export type ReelWearable = { id: string; label: string; image?: string; href?: string };
 
 export function wearableRef(urn: string): { key: string; id: string; chain: Network } | undefined {
-  const match = /^urn:decentraland:(mainnet|matic):collections-v2:(0x[0-9a-f]{40}):(\d{1,78})(?::\d{1,78})?$/i.exec(
+  const match = /^urn:decentraland:(ethereum|mainnet|matic):collections-v2:(0x[0-9a-f]{40}):(\d{1,78})(?::\d{1,78})?$/i.exec(
     urn,
   );
   if (!match) return undefined;
-  const network = match[1]!.toLowerCase() as keyof typeof NETWORKS;
+  const chain = match[1]!.toLowerCase() === "matic" ? NETWORKS.matic : NETWORKS.ethereum;
   const id = itemIdFromUrn(`collections-v2:${match[2]}:${match[3]}`);
   if (!id) return undefined;
-  const chain = NETWORKS[network];
   return { key: `${chain.chainId}:${id}`, id, chain };
 }
 
@@ -46,7 +45,7 @@ function wearableItem(item: CatalogItem, wanted: ReadonlySet<string>, chain: Net
   const id = `${chain.chainId}:${item.id}`;
   if (item.chainId !== chain.chainId || item.category !== "wearable" || !item.name || !wanted.has(id)) return;
   const ref = wearableRef(
-    `urn:decentraland:${chain.network === "MATIC" ? "matic" : "mainnet"}:collections-v2:${item.contractAddress}:${item.itemId}`,
+    `urn:decentraland:${chain.network === "MATIC" ? "matic" : "ethereum"}:collections-v2:${item.contractAddress}:${item.itemId}`,
   );
   if (ref?.key !== id) return;
   return {
