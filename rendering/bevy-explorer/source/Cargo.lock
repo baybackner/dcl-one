@@ -13575,7 +13575,6 @@ dependencies = [
  "avatar",
  "bevy",
  "bevy_console",
- "chrono",
  "clap",
  "common",
  "comms",
@@ -13586,10 +13585,8 @@ dependencies = [
  "ipfs",
  "rapier3d-f64",
  "scene_runner",
- "serde",
  "serde_json",
  "tween",
- "web-time",
 ]
 
 [[package]]
