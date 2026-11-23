@@ -38,7 +38,22 @@ const lateFont = (scale: string) =>
       `<script>addEventListener('load', () => { document.getElementById('word').style.fontFamily = 'Late, sans-serif' })</script>`
   )
 
+// A HUD-like window that scrolls inside itself, 300px high: a sound stage fills the first 600px, and the stage under
+// it, out of view until the window scrolls, holds the picture with `overflow`.
+const offscreen = (overflow: string) =>
+  `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0}</style></head><body>` +
+  `<main style="height:300px;overflow-y:auto">` +
+  `<section data-example="first"><div data-stage><div style="height:600px"></div></div></section>` +
+  `<section data-example="below"><div data-stage><div style="width:200px;height:100px;${overflow}"><img src="${PIXEL}" width="200" height="130" alt=""></div></div></section>` +
+  `</main></body></html>`
+
 const canvases: Record<string, string> = {
+  'window-offscreen-spill': offscreen('overflow-x:clip;overflow-y:visible'),
+  'window-offscreen-clipped': offscreen('overflow:hidden'),
+  // A 14px badge the button positions 3px over its corner, as the HUD IconButton's corner art.
+  'positioned-corner-badge': stage(
+    `<button style="position:relative;width:42px;height:42px;padding:0;border:0"><img src="${PIXEL}" width="14" height="14" alt="" style="position:absolute;top:-3px;right:-3px"></button>`
+  ),
   'clip-x-spill': spill('overflow-x:clip;overflow-y:visible'),
   'clip-both': spill('overflow:clip'),
   'hidden-both': spill('overflow:hidden'),
@@ -113,6 +128,20 @@ describe('when the gallery check measures a canvas', () => {
       await expect(layoutOf(name)).resolves.toBeUndefined()
     }
   )
+
+  it('should scroll a window that scrolls inside itself and fail a spill out of view at first', async () => {
+    await expect(layoutOf('window-offscreen-spill')).rejects.toThrow(
+      /below: a picture paints 200x130 outside its 200x100 div \(scrolled \d+px\)/
+    )
+  })
+
+  it('should pass the same window when the picture below stays in its slot', async () => {
+    await expect(layoutOf('window-offscreen-clipped')).resolves.toBeUndefined()
+  })
+
+  it('should pass a picture the component positions over the edge of its holder', async () => {
+    await expect(layoutOf('positioned-corner-badge')).resolves.toBeUndefined()
+  })
 
   it('should measure after a late web font loads and fail the overlap it causes', async () => {
     await expect(layoutOf('late-font-overlap')).rejects.toThrow(/"Wide" overlaps "Neighbour"/)

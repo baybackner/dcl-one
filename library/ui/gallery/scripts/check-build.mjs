@@ -146,11 +146,11 @@ const EXAMPLES = `(() => {
 })()`
 
 // What breaks an example's layout in a canvas document, as a list of problems (empty when none), or null while a
-// picture or a web font is still loading. An example must fit the viewport (no page wider than it), every picture must load and
-// paint inside the box that holds it (a cover larger than its slot spills over the text beside it), and no line of
-// in-flow text may cover another one. Text a component hides for assistive technology, clips by design (ellipsis,
-// line clamp, scroller) or lays over the card on purpose (a badge, a toast, an overlay: positioned boxes) is not
-// in-flow text.
+// picture or a web font is still loading. An example must fit the viewport (no page wider than it), every picture
+// must load, a picture that flows in its slot must paint inside it (a cover larger than its slot spills over the text
+// beside it), and no line of in-flow text may cover another one. A picture or text the component positions itself
+// (a badge, a toast, an overlay), hides for assistive technology or clips by design (ellipsis, line clamp, scroller)
+// is placed on purpose.
 const LAYOUT = `(() => {
   const doc = ${CANVAS}
   const view = doc?.defaultView
@@ -209,7 +209,9 @@ const LAYOUT = `(() => {
   for (const stage of doc.querySelectorAll('[data-stage]')) {
     for (const media of stage.querySelectorAll('img, video')) {
       const holder = media.parentElement
-      if (!shown(media) || holder === stage) continue
+      // A picture the component positions itself (a corner badge set over the edge of its button) is placed on
+      // purpose, as positioned text is; the rule is for pictures that flow in their slot.
+      if (!shown(media) || holder === stage || ['absolute', 'fixed'].includes(view.getComputedStyle(media).position)) continue
       const box = painted(media.parentElement, media.getBoundingClientRect(), view.getComputedStyle(media).position)
       const slot = holder.getBoundingClientRect()
       if (box.width > 1 && box.height > 1 && (box.left < slot.left - 1 || box.right > slot.right + 1 || box.top < slot.top - 1 || box.bottom > slot.bottom + 1))
@@ -241,10 +243,44 @@ const LAYOUT = `(() => {
   return [...new Set(problems)]
 })()`
 
-/** Waits for the canvas's pictures and fonts, then throws naming every layout problem LAYOUT finds on a page. */
+// The scroll offsets that bring every part of the canvas into view, one viewport apart. LAYOUT measures what paints,
+// and a canvas that scrolls inside its own box (the HUD window) clips whatever lies beyond it, so each offset is
+// measured in turn. A canvas that does not scroll inside itself has the one offset 0.
+const SCROLL_STEPS = `(() => {
+  const doc = ${CANVAS}
+  const view = doc?.defaultView
+  const first = doc?.querySelector('[data-stage]')
+  if (!first) return [0]
+  for (let at = first.parentElement; at && at !== doc.documentElement && at !== doc.body; at = at.parentElement) {
+    if (!/auto|scroll/.test(view.getComputedStyle(at).overflowY) || at.scrollHeight <= at.clientHeight) continue
+    at.setAttribute('data-layout-scroller', '')
+    const steps = []
+    for (let top = 0; top < at.scrollHeight - at.clientHeight; top += at.clientHeight) steps.push(top)
+    steps.push(at.scrollHeight - at.clientHeight)
+    return steps
+  }
+  return [0]
+})()`
+
+/**
+ * Waits for the canvas's pictures and fonts, then throws naming every layout problem LAYOUT finds on a page, at each
+ * scroll offset of a canvas that scrolls inside itself.
+ */
 async function checkLayout(session, page) {
-  const problems = await waitFor(session, LAYOUT, `the pictures and fonts of ${page}`)
-  if (problems.length) throw new Error(`${page} breaks its layout: ${problems.join('; ')}`)
+  const problems = new Set(await waitFor(session, LAYOUT, `the pictures and fonts of ${page}`))
+  const steps = await session.evaluate(SCROLL_STEPS)
+  for (const top of steps.slice(1)) {
+    await session.evaluate(
+      `new Promise((resolve) => { const doc = ${CANVAS}; doc.querySelector('[data-layout-scroller]').scrollTop = ${top}; doc.defaultView.requestAnimationFrame(() => doc.defaultView.requestAnimationFrame(resolve)) })`
+    )
+    for (const problem of await waitFor(
+      session,
+      LAYOUT,
+      `the pictures and fonts of ${page} at ${top}px`
+    ))
+      problems.add(`${problem} (scrolled ${top}px)`)
+  }
+  if (problems.size) throw new Error(`${page} breaks its layout: ${[...problems].join('; ')}`)
 }
 
 /** Runs the checks. Resolves with a summary; rejects naming the first failed check. */
