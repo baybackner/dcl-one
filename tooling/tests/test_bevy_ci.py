@@ -1118,6 +1118,39 @@ class SelectionTest(unittest.TestCase):
                 result = ci.select(before, self.commit())
                 self.assertEqual({lane for lane in (*ci.LANES, 'native-matrix', 'scenes') if result[lane]}, expected)
 
+    def test_the_relay_wake_browser_test_follows_its_crate_tools_and_workflow(self):
+        cases = {
+            'rendering/bevy-explorer/source/crates/dcl_wasm/src/relay_wake.rs': True,
+            'rendering/bevy-explorer/source/crates/dcl_wasm/Cargo.toml': True,
+            'rendering/bevy-explorer/source/Cargo.toml': True,
+            'rendering/bevy-explorer/source/.cargo/config.toml': True,
+            'apps/bevy-explorer/install-web-tools.py': True,
+            'apps/bevy-explorer/install-tools.sh': True,
+            'tooling/bevy-target-cache.py': True,
+            'flake.lock': True,
+            ci.WORKFLOW: True,
+            'rendering/bevy-explorer/source/crates/scene_runner/src/lib.rs': False,
+            'rendering/bevy-explorer/source/deploy/web/engine/sandbox_worker.js': False,
+            'apps/bevy-explorer/build-web.py': False,
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                before = self.git('rev-parse', 'HEAD')
+                self.write(path, 'changed')
+                self.assertEqual(ci.select(before, self.commit())['relay-wake'], expected)
+        self.assertTrue(ci.full_selection('Manual full run')['relay-wake'])
+
+    def test_on_main_the_relay_wake_browser_test_follows_the_web_baseline(self):
+        self.write('rendering/bevy-explorer/source/crates/dcl_wasm/src/lib.rs', 'relay change')
+        changed = self.commit()
+        self.write('apps/bevy-explorer/nginx.conf', 'web change')
+        head = self.commit()
+        for web, expected in ((self.base, True), (changed, False)):
+            with self.subTest(web=web):
+                baselines = {**dict.fromkeys(ci.LANES, self.base), 'web': web}
+                with patch.object(ci, 'main_baselines', return_value=baselines):
+                    self.assertEqual(ci.plan('push', self.base, head, 'example/project')['relay-wake'], expected)
+
     def test_unknown_inputs_and_shared_protoc_changes_run_all_platforms_and_scenes(self):
         for path in ('apps/bevy-explorer/future-build-input', 'apps/bevy-explorer/install-protoc.py',
                      'tooling/bevy-ci.py', 'tooling/bevy-mtimes.py', 'tooling/bevy-target-cache.py'):
