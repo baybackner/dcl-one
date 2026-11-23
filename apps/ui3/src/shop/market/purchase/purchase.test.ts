@@ -1,4 +1,4 @@
-import { decodeFunctionData, type Hex } from "viem";
+import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CHAIN } from "@shop/model/chain";
@@ -13,6 +13,7 @@ import { archiveBid, archivedBidIds, resetArchivedBidsForTests, unarchiveBid } f
 import { acceptBid, cancelBid, isBidTrade, placeBid } from "./bids";
 import { buyTradeWithMana, executeLegacyOrder, manaAllowanceFor } from "./executeOrder";
 import { ensureManaAllowance, resetUnconfirmedApprovalsForTests } from "../lib/mana";
+import { setRpcTransport } from "../lib/rpc";
 import { APPROVAL_REVERTED, purchaseFailure, TxPendingError, TxRevertedError } from "../lib/tx";
 import { transferItem, transferProblem } from "./transfer";
 
@@ -210,14 +211,18 @@ describe("a MANA approval still confirming", () => {
   let allowance = 0n;
   const pending = new Set<string>();
   const reverted = new Set<string>();
+  /** What the chain does when the n-th approval is relayed (by default, nothing until a test says so). */
+  let onRelay: (n: number) => void = () => {};
 
   beforeEach(() => {
     allowance = 0n;
     pending.clear();
     reverted.clear();
+    onRelay = () => {};
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
       if (!String(url).endsWith("/transactions")) throw new Error(`unexpected fetch ${String(url)}`);
       relayed.push((JSON.parse(String(init?.body)) as { transactionData: { params: [string, Hex] } }).transactionData);
+      onRelay(relayed.length);
       return new Response(JSON.stringify({ ok: true, txHash: approvalHash(relayed.length) }));
     }) as typeof fetch;
     restore = fakeChain({
@@ -227,7 +232,60 @@ describe("a MANA approval still confirming", () => {
     });
   });
 
-  const approve = (wallet = fakeWallet()) => ensureManaAllowance({ provider: wallet, chainId: CHAIN.POLYGON, spender: SPENDER, amount: AMOUNT, wait: noWait });
+  const approve = (wallet = fakeWallet(), amount = AMOUNT, readTimeoutMs?: number) =>
+    ensureManaAllowance({ provider: wallet, chainId: CHAIN.POLYGON, spender: SPENDER, amount, wait: noWait, ...(readTimeoutMs ? { readTimeoutMs } : {}) });
+
+  it("two buys at once send one approval: the second waits for the first, then reads its own allowance", async () => {
+    onRelay = () => {
+      allowance = AMOUNT;
+    };
+    const wallet = fakeWallet();
+    expect(await Promise.all([approve(wallet), approve(wallet)])).toEqual([approvalHash(1), null]);
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("two buys at once with the first approval unmined: both stop on its hash", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    const both = await Promise.allSettled([approve(wallet), approve(wallet)]);
+    expect(both.map((r) => r.status === "rejected" && (r.reason as TxPendingError).txHash)).toEqual([approvalHash(1), approvalHash(1)]);
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("a second buy for more, queued behind the first, approves its own amount once the first has confirmed", async () => {
+    const MORE = manaFromWhole(5);
+    onRelay = (n) => {
+      allowance = n === 1 ? AMOUNT : MORE;
+    };
+    const wallet = fakeWallet();
+    expect(await Promise.all([approve(wallet), approve(wallet, MORE)])).toEqual([approvalHash(1), approvalHash(2)]);
+    expect(relayed).toHaveLength(2);
+  });
+
+  it("an allowance that covers a smaller buy lets it pass, and keeps the larger approval's hash", async () => {
+    allowance = manaFromWhole(1);
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    await expect(approve(wallet, manaFromWhole(1))).resolves.toBeNull();
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("a receipt read that never answers stops the retry on the known hash in bounded time, and keeps it", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toBeInstanceOf(TxPendingError);
+    restore?.();
+    restore = setRpcTransport(async (_chainId, method) => {
+      if (method === "eth_getTransactionReceipt") return new Promise(() => {});
+      if (method === "eth_call") return encodeFunctionResult({ abi: ERC20_ABI, functionName: "allowance", result: 0n });
+      throw new Error(`unsupported ${method}`);
+    });
+    await expect(approve(wallet, AMOUNT, 20)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    await expect(approve(wallet, AMOUNT, 20)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    expect(relayed).toHaveLength(1);
+  });
 
   it("sends no second approval while the first is unmined: a second buy stops on the first one's hash", async () => {
     pending.add(approvalHash(1));

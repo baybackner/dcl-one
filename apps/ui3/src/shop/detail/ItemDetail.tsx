@@ -959,7 +959,8 @@ export default function ItemDetail() {
         onClose={() => {
           setBuyNow(null);
           setBuyingMixed(null);
-          setBuyingOrder(null);
+          // Through the order dialog's own close: an order that went out before the error still has the page read again.
+          closeOrderBuy();
         }}
       >
         <Suspense fallback={null}>
