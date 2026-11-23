@@ -47,7 +47,7 @@ function LoadingCommunity() {
   return null;
 }
 
-function setup(session: { sid?: string | null; wallet?: string | null } = { sid: "sid-1" }, initial = "/", strict = false) {
+function setup(session: { sid?: string | null; wallet?: string | null; analyticsUserId?: string | null } = { sid: "sid-1" }, initial = "/", strict = false) {
   const router = createMemoryRouter(
     [
       {
@@ -81,13 +81,13 @@ describe("usePageView", () => {
   afterEach(cleanup);
 
   it("sends page(pathname) on the first load with the session id and the verified wallet as userId", async () => {
-    setup({ sid: "sid-1", wallet: "0xABC" }, "/create");
+    setup({ sid: "sid-1", analyticsUserId: "0xabc" }, "/create");
     await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
-    expect(page).toHaveBeenCalledWith("/create", {}, { sid: "sid-1", userId: "0xABC" });
+    expect(page).toHaveBeenCalledWith("/create", {}, { sid: "sid-1", userId: "0xabc" });
   });
 
-  it("sends no userId without a verified wallet", async () => {
-    setup({ sid: "sid-1", wallet: null }, "/create");
+  it("never sends the display wallet as userId", async () => {
+    setup({ sid: "sid-1", wallet: "0xdisplay", analyticsUserId: null }, "/create");
     await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
     expect(page.mock.calls[0]?.[2]).toEqual({ sid: "sid-1" });
   });
@@ -128,6 +128,30 @@ describe("usePageView", () => {
     await waitFor(() => expect(names()).toEqual(["/create"]));
   });
 
+  it("sends a page again after leaving through a suppressed path and coming back", async () => {
+    const router = setup(undefined, "/events");
+    await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+    await act(() => router.navigate("/whats-on"));
+    await act(() => router.navigate("/events"));
+    await waitFor(() => expect(names()).toEqual(["/events", "/events"]));
+  });
+
+  it("sends a page again after leaving through an excluded surface and coming back", async () => {
+    const router = setup(undefined, "/events");
+    await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+    await act(() => router.navigate("/shop/items"));
+    await act(() => router.navigate("/events"));
+    await waitFor(() => expect(names()).toEqual(["/events", "/events"]));
+  });
+
+  it("sends a page again after a named page in between", async () => {
+    const router = setup(undefined, "/events", true);
+    await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+    await act(() => router.navigate("/blog"));
+    await act(() => router.navigate("/events?tab=live"));
+    await waitFor(() => expect(names()).toEqual(["/events", "Blog", "/events"]));
+  });
+
   it("lets a route's own page view replace the default for that navigation", async () => {
     const router = setup(undefined, "/create");
     await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
@@ -161,27 +185,74 @@ describe("usePageView", () => {
 });
 
 describe("useNotFoundPageView", () => {
-  beforeEach(() => page.mockReset());
-  afterEach(cleanup);
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    page.mockReset();
+    fetchMock = vi.fn(async () => Response.json({ sid: "fetched-sid", userId: "0xverified" }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   function NotFoundAt({ notFound }: { notFound: boolean }) {
     useNotFoundPageView(notFound);
     return null;
   }
 
-  function renderAt(path: string, notFound: boolean) {
+  // `root` null: the cold 404 of a URL no route matches, rendered without the root loader's data.
+  function renderAt(path: string, notFound: boolean, root: { sid?: string | null } | null = { sid: "sid-1" }) {
     const router = createMemoryRouter(
-      [{ id: "root", path: "*", loader: () => ({ sid: "sid-1" }), Component: () => <NotFoundAt notFound={notFound} />, HydrateFallback: () => null }],
+      [{ id: "root", path: "*", loader: () => root, Component: () => <NotFoundAt notFound={notFound} />, HydrateFallback: () => null }],
       { initialEntries: [path] },
     );
     render(<RouterProvider router={router} />);
   }
 
   // The root error boundary renders it in place of the app, so the default page(pathname) is not sent with it.
-  it("sends the 404's own page view with its path", async () => {
+  it("sends the 404's own page view with the root session, without fetching one", async () => {
     renderAt("/missing/thing", true);
     await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
     expect(page).toHaveBeenCalledWith("Not Found", { path: "/missing/thing" }, { sid: "sid-1" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends a cold 404's page view with the session it fetches", async () => {
+    renderAt("/missing/deep/thing", true, null);
+    await waitFor(() => expect(page).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith("/internal/session", expect.objectContaining({ cache: "no-store" }));
+    expect(page).toHaveBeenCalledWith("Not Found", { path: "/missing/deep/thing" }, { sid: "fetched-sid", userId: "0xverified" });
+  });
+
+  it("sends nothing, and does not throw, when the session cannot be fetched", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    renderAt("/missing/a/b", true, null);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    expect(page).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when the session endpoint answers an error or no sid", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 500 }));
+    renderAt("/missing/a/b", true, null);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    cleanup();
+    fetchMock.mockResolvedValueOnce(Response.json({}));
+    renderAt("/missing/a/c", true, null);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+    expect(page).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["with the root session", { sid: "sid-1" }],
+    ["on a cold load", null],
+  ])("sends nothing for a missing Shop page %s", async (_label, root) => {
+    renderAt("/shop/unknown/item", true, root);
+    await act(async () => {});
+    expect(page).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing for another error status", async () => {
@@ -191,9 +262,10 @@ describe("useNotFoundPageView", () => {
   });
 
   it("sends nothing for a missing page under a path whose pages own their view", async () => {
-    renderAt("/places/unknown/deep", true);
+    renderAt("/places/unknown/deep", true, null);
     await act(async () => {});
     expect(page).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

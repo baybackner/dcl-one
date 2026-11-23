@@ -30,7 +30,7 @@ import { StatusPage } from "@dcl/one-ui/apps/sites/status/StatusPage";
 import { EMBED_BOOT_SCRIPT } from "@/core/lib/embed";
 import { ThumbnailPublicBase } from "@dcl/one-ui/components/AppChrome/thumbnail-public-base";
 import type { ShouldRevalidateFunctionArgs } from "react-router";
-import { pageSid, parseCookies, publicResponseContext, sessionMiddleware } from "@/core/lib/telemetry/session";
+import { pageSid, parseCookies, publicResponseContext, readVerifiedWallet, sessionMiddleware } from "@/core/lib/telemetry/session";
 import { useNotFoundPageView, useRoutePageView } from "@/core/lib/telemetry/page-view";
 import { SitesLocaleContext, sitesLanguage, type SitesLocale, type SitesLocaleHandle } from "@dcl/one-ui/apps/sites/chrome/sites-locale";
 import { readWallet } from "@/data/lib/auth/wallet-cookie";
@@ -91,6 +91,11 @@ export async function loader({ request, context }: Route.LoaderArgs) {
      * navigation. Null on a response a shared cache may store (the docs).
      */
     sid: pageSid(request, context),
+    /**
+     * Segment's `userId`: the wallet the server verified (`dcl_wallet_verified`), never the display
+     * cookie `wallet` comes from, which the browser writes. Null when none, and on a shared-cacheable response.
+     */
+    analyticsUserId: context.get(publicResponseContext) ? null : readVerifiedWallet(request),
   };
 }
 

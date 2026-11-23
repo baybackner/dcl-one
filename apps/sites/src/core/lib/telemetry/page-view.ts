@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useRouteLoaderData } from "react-router";
 
 import { page } from "./track";
@@ -50,28 +50,44 @@ export function isOutsideLegacySites(pathname: string): boolean {
   return OUTSIDE_LEGACY_SITES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
-type RootSession ={ sid?: string | null; wallet?: string | null };
+type RootSession = { sid?: string | null; analyticsUserId?: string | null };
+
+/** The root loader's session id and Segment `userId` (the server-verified wallet only). */
+function useRootSession(): { sid: string; userId: string } {
+  const root = useRouteLoaderData("root") as RootSession | undefined;
+  return { sid: root?.sid ?? "", userId: root?.analyticsUserId ?? "" };
+}
+
+/**
+ * Sends `page(name, properties)` for `view` once per pathname, name and properties. A null view sends
+ * nothing and forgets the last one, so leaving to an untracked page and coming back counts again.
+ */
+function useSendPageView(view: PageView | null | undefined, sid: string, userId: string): void {
+  const { pathname } = useLocation();
+  const key = view?.name ? JSON.stringify([pathname, view.name, view.properties ?? {}]) : null;
+  const sent = useRef<string | null>(null);
+  useEffect(() => {
+    if (!key) {
+      sent.current = null;
+      return;
+    }
+    if (!sid || sent.current === key) return;
+    sent.current = key;
+    const [, name, properties] = JSON.parse(key) as [string, string, Record<string, unknown>];
+    page(name, properties, { sid, ...(userId ? { userId } : {}) });
+  }, [key, sid, userId]);
+}
 
 /**
  * Sends `page(name, properties)` once the view is known (a null view waits, as a page whose name is
  * its data does until the data is there) and again only when the pathname, the name or the
  * properties change: a search-only navigation, a re-render or StrictMode's second effect sends
- * nothing. The session id and verified wallet come from the root loader; without a session id
+ * nothing. The session id and the verified wallet come from the root loader; without a session id
  * nothing is sent.
  */
 export function usePageView(view: PageView | null | undefined): void {
-  const { pathname } = useLocation();
-  const root = useRouteLoaderData("root") as RootSession | undefined;
-  const sid = root?.sid ?? "";
-  const wallet = root?.wallet ?? "";
-  const key = view?.name ? JSON.stringify([pathname, view.name, view.properties ?? {}]) : null;
-  const sent = useRef<string | null>(null);
-  useEffect(() => {
-    if (!key || !sid || sent.current === key) return;
-    sent.current = key;
-    const [, name, properties] = JSON.parse(key) as [string, string, Record<string, unknown>];
-    page(name, properties, { sid, ...(wallet ? { userId: wallet } : {}) });
-  }, [key, sid, wallet]);
+  const { sid, userId } = useRootSession();
+  useSendPageView(view, sid, userId);
 }
 
 /** The root's page view: `page(pathname)`, except under `isPageTrackingExempt` and `isOutsideLegacySites`. */
@@ -80,8 +96,43 @@ export function useRoutePageView(): void {
   usePageView(isPageTrackingExempt(pathname) || isOutsideLegacySites(pathname) ? null : { name: pathname });
 }
 
-/** The 404 page's own view, `page('Not Found', { path })`, outside the paths whose pages own theirs. */
+export const SESSION_ENDPOINT = "/internal/session";
+
+/** The visitor's session from `/internal/session`; null when it cannot be read. */
+async function fetchSession(): Promise<{ sid: string; userId: string } | null> {
+  try {
+    const response = await fetch(SESSION_ENDPOINT, { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { sid?: unknown; userId?: unknown } | null;
+    const sid = typeof body?.sid === "string" ? body.sid : "";
+    if (!sid) return null;
+    return { sid, userId: typeof body?.userId === "string" ? body.userId : "" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The 404 page's own view, `page('Not Found', { path })`, outside the paths whose pages own theirs and
+ * the surfaces the legacy site never served. A URL no route matches renders without the root loader,
+ * so its session is read from `/internal/session` instead.
+ */
 export function useNotFoundPageView(notFound: boolean): void {
   const { pathname } = useLocation();
-  usePageView(notFound && !isPageTrackingExempt(pathname) ? { name: "Not Found", properties: { path: pathname } } : null);
+  const root = useRootSession();
+  const tracked = notFound && !isPageTrackingExempt(pathname) && !isOutsideLegacySites(pathname);
+  const needsSession = tracked && !root.sid;
+  const [fetched, setFetched] = useState<{ sid: string; userId: string } | null>(null);
+  useEffect(() => {
+    if (!needsSession) return;
+    let live = true;
+    void fetchSession().then((session) => {
+      if (live && session) setFetched(session);
+    });
+    return () => {
+      live = false;
+    };
+  }, [needsSession]);
+  const session = root.sid ? root : (fetched ?? { sid: "", userId: "" });
+  useSendPageView(tracked ? { name: "Not Found", properties: { path: pathname } } : null, session.sid, session.userId);
 }

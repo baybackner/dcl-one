@@ -39,7 +39,7 @@ export function blogPostPageView(data: BlogPostPayload): PageView | null {
       author: post.author.name,
       // A post without an author is the "Decentraland" author, whose slug the legacy site named so.
       authorSlug: post.author.slug || "decentraland",
-      publishedDate: post.publishedAt,
+      publishedDate: data.publishedDate,
     },
   };
 }

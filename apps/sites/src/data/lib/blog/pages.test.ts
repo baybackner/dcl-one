@@ -201,6 +201,12 @@ describe("post", () => {
       expect(outcome.payload.shareUrl).toBe("https://public.example/blog/platform/first-post");
     });
 
+    it("should answer the CMS's raw publishedDate beside the post's display date", () => {
+      expect(outcome.payload.publishedDate).toBe("2026-07-02T10:00-07:00");
+      expect(outcome.payload.post.publishedAt).toBe("2026-07-02");
+      expect(outcome.payload.post).not.toHaveProperty("publishedDate");
+    });
+
     it("should answer its related posts", () => {
       expect(outcome.payload.related?.map((r) => r.slug)).toEqual(["second-post", "news-1", "news-2"]);
     });

@@ -69,7 +69,8 @@ describe("blog page views", () => {
   });
 
   it("names a post by its title, with its slug, category, author and date", () => {
-    expect(blogPostPageView({ state: "ok", post, related: null, shareUrl: "", categories: [] })).toEqual({
+    const raw = "2026-11-20T15:04:05.000-03:00";
+    expect(blogPostPageView({ state: "ok", post, publishedDate: raw, related: null, shareUrl: "", categories: [] })).toEqual({
       name: "Genesis Plaza reopens",
       properties: {
         title: "Genesis Plaza reopens",
@@ -78,14 +79,15 @@ describe("blog page views", () => {
         categorySlug: "announcements",
         author: "DCL Team",
         authorSlug: "dcl-team",
-        publishedDate: "2026-09-04",
+        // The CMS's own value, offset included, not the display date.
+        publishedDate: "2026-11-20T15:04:05.000-03:00",
       },
     });
   });
 
   it("gives a post without an author the legacy default author's slug", () => {
     const anonymous = { ...post, author: { slug: "", name: "Decentraland", image: "" } };
-    const view = blogPostPageView({ state: "ok", post: anonymous, related: null, shareUrl: "", categories: [] });
+    const view = blogPostPageView({ state: "ok", post: anonymous, publishedDate: "", related: null, shareUrl: "", categories: [] });
     expect(view?.properties).toMatchObject({ author: "Decentraland", authorSlug: "decentraland" });
   });
 
