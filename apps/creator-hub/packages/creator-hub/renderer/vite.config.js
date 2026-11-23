@@ -10,6 +10,7 @@ const PACKAGE_DIR = join(PACKAGE_ROOT, '..');
 const UI3_SRC = join(PACKAGE_ROOT, '../../../../ui3/src').replaceAll('\\', '/');
 const SHOP_SRC = join(PACKAGE_ROOT, '../../../../../library/shop').replaceAll('\\', '/');
 const WEB_CORE_SRC = join(PACKAGE_ROOT, '../../../../../library/web-core').replaceAll('\\', '/');
+const ONE_UI_SRC = join(PACKAGE_ROOT, '../../../../../library/ui').replaceAll('\\', '/');
 
 // The renderer tests run in UTC, so a date that code makes in local time does not depend on the
 // zone of the machine. This file runs before Vitest starts a worker, which is where Vitest says to
@@ -33,6 +34,7 @@ const config = {
       '@ui': UI3_SRC,
       '@shop': SHOP_SRC,
       '@web-core': WEB_CORE_SRC,
+      '@dcl/one-ui': ONE_UI_SRC,
     },
     // The ui3 sources sit outside this workspace and must use the React installed here.
     dedupe: ['react', 'react-dom'],
@@ -41,7 +43,7 @@ const config = {
   server: {
     fs: {
       strict: true,
-      allow: [searchForWorkspaceRoot(PACKAGE_ROOT), UI3_SRC, SHOP_SRC, WEB_CORE_SRC],
+      allow: [searchForWorkspaceRoot(PACKAGE_ROOT), UI3_SRC, SHOP_SRC, WEB_CORE_SRC, ONE_UI_SRC],
     },
   },
   build: {

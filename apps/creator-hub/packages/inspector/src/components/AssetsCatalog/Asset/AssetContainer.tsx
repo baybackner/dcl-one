@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useMemo, useState, useRef } from 'react';
 
 import DclLogomark from '@ui/atoms/DclLogomark';
-import Tooltip from '@ui/atoms/Tooltip';
+import { Tooltip } from '@dcl/one-ui/components/Tooltip/Tooltip';
 
 import {
   getBuiltInEmote,
