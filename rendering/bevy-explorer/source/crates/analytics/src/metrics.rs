@@ -25,6 +25,9 @@ impl Plugin for MetricsPlugin {
                 report_badge_events,
             ),
         );
-        app.add_plugins(crate::page_events::PageEventsPlugin);
+        app.add_plugins((
+            crate::page_events::PageEventsPlugin,
+            crate::feature_flags::FeatureFlagsReportPlugin,
+        ));
     }
 }

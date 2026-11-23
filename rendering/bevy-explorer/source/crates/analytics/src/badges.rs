@@ -205,7 +205,6 @@ impl ParcelTracker {
     }
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn report_badge_events(
     player: Query<(&AvatarDynamicState, Has<OutOfWorld>), With<PrimaryUser>>,
     time: Res<Time>,

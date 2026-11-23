@@ -401,6 +401,25 @@ impl CrdtContexts {
             .copied()
             .or_else(|| (!common::structs::multi_tenant()).then(|| self.shared()))
     }
+
+    /// Removes the contexts `keep` rejects and returns their entities. Marks the resource changed
+    /// only when something was removed: change-detecting readers (the listener AoI rebuild) must
+    /// not run on every frame of a per-frame sweep.
+    pub fn reap(contexts: &mut ResMut<Self>, mut keep: impl FnMut(&str) -> bool) -> Vec<Entity> {
+        let doomed: Vec<String> = contexts
+            .0
+            .iter()
+            .filter(|(hash, _)| !keep(hash))
+            .map(|(hash, _)| hash.clone())
+            .collect();
+        if doomed.is_empty() {
+            return Vec::new();
+        }
+        doomed
+            .iter()
+            .filter_map(|hash| contexts.0.remove(hash))
+            .collect()
+    }
 }
 
 impl GlobalCrdtState {
@@ -512,7 +531,10 @@ impl GlobalCrdtState {
     }
 }
 
+/// Requires `ForeignAvatar`: the avatar crate tells remote avatars apart by that marker, as it
+/// does not depend on comms.
 #[derive(Component, Debug)]
+#[require(common::structs::ForeignAvatar)]
 pub struct ForeignPlayer {
     pub address: Address,
     /// the crdt context (player-presence view) this player entity belongs to; the same
@@ -758,7 +780,6 @@ fn remote_move_kind(
 /// [`PlayerMessage::Movement`]) or as a legacy rfc4 packet over a websocket transport (as
 /// [`PlayerMessage::PlayerData`]). Writes the CRDT transform and emits a [`PlayerPositionEvent`]
 /// for `foreign_dynamics` to interpolate.
-#[allow(clippy::too_many_arguments)]
 fn apply_foreign_movement(
     m: &rfc4::Movement,
     entity: Entity,
@@ -828,7 +849,6 @@ fn apply_foreign_movement(
     });
 }
 
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn process_transport_updates(
     mut commands: Commands,
     mut contexts: Query<(Entity, &mut GlobalCrdtState)>,
@@ -1628,6 +1648,59 @@ pub fn acceptable_emote_urn(urn: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct Doomed(Option<String>);
+
+    #[derive(Resource, Default)]
+    struct Observed {
+        changed: bool,
+    }
+
+    fn reap_doomed(mut contexts: ResMut<CrdtContexts>, doomed: Res<Doomed>) {
+        CrdtContexts::reap(&mut contexts, |hash| Some(hash) != doomed.0.as_deref());
+    }
+
+    fn observe(contexts: Res<CrdtContexts>, mut observed: ResMut<Observed>) {
+        observed.changed = contexts.is_changed();
+    }
+
+    #[test]
+    fn reaping_marks_contexts_changed_only_when_something_is_removed() {
+        let mut app = App::new();
+        let shared = app.world_mut().spawn_empty().id();
+        let room = app.world_mut().spawn_empty().id();
+        app.insert_resource(CrdtContexts(HashMap::from_iter([
+            (String::new(), shared),
+            ("room".to_owned(), room),
+        ])))
+        .init_resource::<Doomed>()
+        .init_resource::<Observed>()
+        .add_systems(Update, (reap_doomed, observe).chain());
+
+        // the first frame sees the resource as added
+        app.update();
+        assert!(app.world().resource::<Observed>().changed);
+
+        app.update();
+        assert!(!app.world().resource::<Observed>().changed);
+        assert_eq!(app.world().resource::<CrdtContexts>().0.len(), 2);
+
+        app.world_mut().resource_mut::<Doomed>().0 = Some("room".to_owned());
+        app.update();
+        assert!(app.world().resource::<Observed>().changed);
+        assert_eq!(
+            app.world()
+                .resource::<CrdtContexts>()
+                .0
+                .keys()
+                .collect::<Vec<_>>(),
+            vec![""]
+        );
+
+        app.update();
+        assert!(!app.world().resource::<Observed>().changed);
+    }
+
     #[test]
     fn a_packet_names_the_movement_state_it_announces() {
         use rfc4::movement::GlideState::{Gliding, OpeningProp, PropClosed};
@@ -1969,6 +2042,65 @@ mod tests {
         let (_, payload) = topics_rx.try_recv().unwrap();
         assert_eq!(payload.len(), dcl_types::MAX_TOPIC_MESSAGE_BYTES - 1);
         assert!(topics_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn unpublished_own_profile_does_not_delay_peer_version_events() {
+        use crate::profile::{process_profile_events, CurrentUserProfile, ProfileCache};
+        use bevy::asset::{io::memory::MemoryAssetReader, AssetPlugin};
+        use ipfs::{IpfsIo, IpfsResource};
+
+        let (mut app, context) = presence_app();
+        let owner = Address::repeat_byte(7);
+        let mut wallet = wallet::Wallet::default();
+        wallet.finalize_remote(owner, owner, vec![], false);
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .insert_resource(wallet)
+            .init_resource::<CurrentUserProfile>()
+            .init_resource::<ProfileCache>()
+            .insert_resource(IpfsResource {
+                inner: Arc::new(IpfsIo::new(
+                    false,
+                    Box::new(MemoryAssetReader { root: default() }),
+                    None,
+                    default(),
+                    1,
+                    mpsc::unbounded_channel().0,
+                )),
+            })
+            .add_systems(Update, process_profile_events);
+        let transport = spawn_transport(&mut app, context);
+        queue_joined(&mut app, context, transport, Address::repeat_byte(8));
+        app.update();
+        let peer = app
+            .world_mut()
+            .query_filtered::<Entity, With<ForeignPlayer>>()
+            .single(app.world())
+            .unwrap();
+
+        for event in [
+            ProfileEventType::Request {
+                request: rfc4::ProfileRequest {
+                    address: format!("{owner:#x}"),
+                    ..default()
+                },
+                transport,
+            },
+            ProfileEventType::Version(rfc4::AnnounceProfileVersion { profile_version: 3 }),
+        ] {
+            app.world_mut().send_event(ProfileEvent {
+                sender: peer,
+                event,
+            });
+        }
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<ForeignPlayer>(peer)
+                .unwrap()
+                .profile_version,
+            3
+        );
     }
 
     /// Each foreign player's presence set.

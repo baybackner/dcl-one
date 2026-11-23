@@ -130,7 +130,6 @@ fn locomotion_speeds(
 }
 
 /// Keeps the player's [`LocomotionSpeeds`] in step with the active locomotion settings.
-#[allow(clippy::type_complexity)]
 fn update_locomotion_speeds(
     mut player: Query<(
         &PrimaryUser,
@@ -416,7 +415,6 @@ struct CollisionPush(Vec3);
 
 impl<C: Component + Clone + FromConfig> ActivePlayerComponent<C> {
     // pick from available of any write-time, based on priority
-    #[allow(clippy::too_many_arguments)]
     fn pick_by_priority(
         mut commands: Commands,
         q: Query<(Entity, Ref<C>, &SceneEntity)>,
@@ -546,7 +544,6 @@ impl<C: Component + Clone + FromConfig> ActivePlayerComponent<C> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn apply_impulses(
     impulses: Query<(&PhysicsCombinedImpulse, &SceneEntity), Changed<PhysicsCombinedImpulse>>,
     forces: Query<(Ref<PhysicsCombinedForce>, &SceneEntity)>,
@@ -767,7 +764,6 @@ const NO_EXTERNAL_VELOCITY: f32 = 1e-3;
 // server-hosted, which includes the default controller); a parcel scene's override, a smart
 // wearable or scene-spawned portable, a suppression, an impulse or force this frame, or no
 // movement input held leaves none.
-#[allow(clippy::type_complexity)]
 fn record_own_movement(
     mut player: Query<
         (
@@ -1043,7 +1039,6 @@ fn resolve_collisions(
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn broadcast_movement_info(
     mut info: ResMut<AvatarMovementInfo>,
     active_components: Query<
