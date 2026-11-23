@@ -13,6 +13,7 @@ import {
   track,
   type TrackContext,
   withoutSensitiveParams,
+  withoutSensitivePath,
 } from "./track";
 
 const CTX: TrackContext = {
@@ -463,17 +464,39 @@ describe("page, identify, gates and the telemetry client (fetch mocked)", () => 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps a document loaded on an exempt page untracked after it navigates, except for conversions", async () => {
+  it("keeps a document loaded on an exempt page from sending legacy-parity messages after it navigates, except conversions", async () => {
     const browser = stubBrowser({ path: "/privacy/" });
     const fresh = await loadDocument();
     const freshTrack = fresh.track as unknown as typeof trackAny;
     fresh.page("Privacy", {}, { sid: "s" });
     browser.navigate("/explore");
-    freshTrack("evt", {}, CTX);
+    freshTrack("Click", {}, { ...CTX, legacy: true });
     fresh.page("Explore", {}, { sid: "s" });
     fresh.identify("0x1", {}, { sid: "s" });
     expect(fetchMock).not.toHaveBeenCalled();
-    freshTrack("download_started", {}, { ...CTX, conversion: true });
+    freshTrack("download_started", {}, { ...CTX, conversion: true, legacy: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never holds back the site's own events in an exempt session", async () => {
+    stubBrowser({ path: "/terms" });
+    const fresh = await loadDocument();
+    (fresh.track as unknown as typeof trackAny)("lp_legal_viewed", { doc: "terms" }, CTX);
+    expect(sent(fetchMock).map((m) => m.body.event)).toEqual(["lp_legal_viewed"]);
+  });
+
+  it.each(["/content-policy", "/rewards", "/creatorFund", "/referral", "/Terms/", "/download"])(
+    "treats %s, a served path of an exempt document, as exempt",
+    async (path) => {
+      stubBrowser({ path });
+      (await loadDocument()).page("Doc", {}, { sid: "s" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not treat /credits-terms, which the legacy site tracked, as exempt", async () => {
+    stubBrowser({ path: "/credits-terms" });
+    (await loadDocument()).page("Credits", {}, { sid: "s" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -508,6 +531,16 @@ describe("page, identify, gates and the telemetry client (fetch mocked)", () => 
     const fresh = await loadDocument();
     (fresh.track as unknown as typeof trackAny)("Shop Viewed Page", {}, { sid: "s", source: "shop" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts credential paths in any case and with a trailing slash, and the wallet in a confirmation link's query", () => {
+    expect(withoutSensitivePath("/CAST/S/live-key/")).toBe("/cast/s/:key/");
+    expect(withoutSensitivePath("/Account/Confirm-Email/CODE-1/")).toBe("/account/Confirm-Email/:code/");
+    const referrer = "https://sites.example/account/confirm-email/CODE-2?address=0xabc&utm_source=mail";
+    const clean = withoutSensitiveParams(referrer);
+    expect(clean).toBe("https://sites.example/account/confirm-email/:code?utm_source=mail");
+    expect(clean).not.toContain("CODE-2");
+    expect(clean).not.toContain("0xabc");
   });
 
   it("never sends an e-mail confirmation code, from the browser's URL or from a caller's page properties", async () => {

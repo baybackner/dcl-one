@@ -18,6 +18,11 @@ export type TrackContext = {
    * beacon did. The Shop suppressed every bot event, purchases included, so it is ignored there.
    */
   conversion?: boolean;
+  /**
+   * A legacy-parity event (a name the legacy site sent): it follows the legacy exempt-session gate,
+   * as `page` and `identify` always do. Events without it are never held back by that gate.
+   */
+  legacy?: boolean;
 };
 
 export type TrackFn = <K extends TelemetryEventName>(
@@ -81,6 +86,8 @@ const SENSITIVE_QUERY_PARAMS = new Set([
   "access_token",
   "authresult",
   "magic_credential",
+  // The e-mail confirmation pages carry the wallet in the query: a wallet reaches Segment only as `userId`.
+  "address",
 ]);
 
 function withoutSensitivePairs(part: string): string {
@@ -103,7 +110,8 @@ function withoutSensitivePairs(part: string): string {
  * all `POST /cast/streamer-token` checks, and an e-mail confirmation link's code confirms the
  * address it was sent to. */
 const SENSITIVE_PATHS: Array<[RegExp, string]> = [
-  [/\/cast\/s\/[^/?#]+/g, "/cast/s/:key"],
+  // Routes match case-insensitively, so `/Cast/S/{key}` serves the same page.
+  [/\/cast\/s\/[^/?#]+/gi, "/cast/s/:key"],
   [/\/account\/(confirm-email-challenge|confirm-email|credits-email-confirmed)\/[^/?#]+/gi, "/account/$1/:code"],
 ];
 
@@ -361,22 +369,32 @@ export function isBotUserAgent(userAgent: string): boolean {
   return isbot(userAgent);
 }
 
-/** Text pages a visitor reaches from a shared link: a session that starts on one is not tracked. */
+/**
+ * Pages a visitor reaches from a shared link, where a session that starts sends no legacy-parity
+ * message: the legacy site's exempt set (`/download` and every legal document but `/credits-terms`),
+ * at every path the site serves each document on (its slug, its key, an alias). A test in
+ * `data/legal` keeps this list equal to the served legal paths.
+ */
 const EXEMPT_PATHS = new Set([
+  "/download",
   "/brand",
   "/content",
-  "/creator-fund-terms",
-  "/download",
+  "/content-policy",
   "/ethics",
+  "/rewards-terms",
+  "/rewards",
+  "/creator-fund-terms",
+  "/creatorfund",
+  "/security",
   "/privacy",
   "/referral-terms",
-  "/rewards-terms",
-  "/security",
+  "/referral",
   "/terms",
 ]);
 
 export function isAnalyticsExemptPath(pathname: string): boolean {
-  return EXEMPT_PATHS.has(pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname);
+  const path = (pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname).toLowerCase();
+  return EXEMPT_PATHS.has(path);
 }
 
 /** The path this document was loaded on: a client navigation does not change it, a reload does. */
@@ -405,18 +423,24 @@ function exemptSession(): boolean {
   return isAnalyticsExemptPath(initialPath());
 }
 
-/** The browser gates: a bot, for every source, and an exempt session, for Sites only. */
-function suppressedInBrowser(ctx: Pick<TrackContext, "source" | "conversion">): boolean {
+type GateContext = Pick<TrackContext, "source" | "conversion" | "legacy">;
+
+/**
+ * The browser gates: a bot, for every source; and, for Sites only, an exempt session, which holds
+ * back `page`, `identify` and legacy-parity tracks, never the site's other events.
+ */
+function suppressedInBrowser(body: SegmentBody, ctx: GateContext): boolean {
   const sites = (ctx.source ?? "sites") === "sites";
   if (sites && ctx.conversion) return false;
   if (isBotUserAgent(typeof navigator !== "undefined" ? navigator.userAgent ?? "" : "")) return true;
-  return sites && exemptSession();
+  const legacyParity = body.type !== "track" || ctx.legacy === true;
+  return sites && legacyParity && exemptSession();
 }
 
-function sendToSegment(body: SegmentBody, ctx: Pick<TrackContext, "source" | "conversion">): void {
+function sendToSegment(body: SegmentBody, ctx: GateContext): void {
   const writeKey = segmentWriteKey(ctx.source);
   if (!writeKey) return;
-  if (isBrowser() && suppressedInBrowser(ctx)) return;
+  if (isBrowser() && suppressedInBrowser(body, ctx)) return;
 
   const url = segmentApiUrl(body.type);
   const payload = JSON.stringify(buildSegmentPayload(body, writeKey));
@@ -521,7 +545,10 @@ export function page(name: string, properties: Record<string, unknown>, ctx: Tra
   }
 }
 
-/** A Segment identify call for `userId` (lowercased). Browser only. */
+/**
+ * A Segment identify call for `userId` (lowercased). Browser only. Traits go to Segment as given:
+ * never pass personal data (e-mail, name, phone) as a trait.
+ */
 export function identify(userId: string, traits: Record<string, unknown>, ctx: TrackContext): void {
   try {
     if (!isBrowser() || !userId) return;
@@ -536,9 +563,15 @@ export function identify(userId: string, traits: Record<string, unknown>, ctx: T
 /** The client a caller outside React holds (a store, an imperative flow). */
 export type TelemetryClient = {
   readonly anonymousId: string;
+  /** Sends with this client's identity; it has no story, variant or conversion. */
   track(event: string, props?: Record<string, unknown>): void;
+  /** Never pass personal data (e-mail, name, phone) as a trait. */
   identify(userId: string, traits?: Record<string, unknown>): void;
-  /** Forgets the user and starts a new anonymous id, returned so the caller can persist it. */
+  /**
+   * Forgets the user and starts a new anonymous id, returned so the caller can persist it. It
+   * changes this client only: the HttpOnly `sid` cookie, and every Sites `track` sent with it,
+   * keeps the old id, so the visitor appears under both ids from then on.
+   */
   reset(): string;
 };
 
