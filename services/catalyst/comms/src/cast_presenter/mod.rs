@@ -28,7 +28,8 @@
 //!   taken, so a forgotten presentation never blocks a new share of its scene
 //!   (upstream runs both, and clients then show different ones). The
 //!   replaced bot keeps its slot until it has shut down, and the new bot
-//!   publishes only after the replaced one announced its stop. A token of a
+//!   publishes only after every presentation of the room that stopped
+//!   before (replaced or stopped) sent `presentation:stopped`. A token of a
 //!   revoked or rotated credential replaces nothing. A token whose bot is
 //!   running answers 409 and stops nothing (upstream starts it, and LiveKit
 //!   drops the first bot). An upload to a full node is answered 429 before it
