@@ -472,7 +472,7 @@ fn gltf_with_scene(default_scene: Option<Handle<Scene>>) -> Gltf {
     }
 }
 
-fn app_with_avatar_scenes() -> App {
+pub(crate) fn app_with_avatar_scenes() -> App {
     let mut app = app_with_emote_downloads();
     app.add_plugins((TransformPlugin, ScenePlugin))
         .register_type::<Name>()
@@ -490,7 +490,8 @@ fn app_with_avatar_scenes() -> App {
         .init_asset::<SkinnedMeshInverseBindposes>()
         .init_asset::<AnimationGraph>()
         .init_resource::<AssetCache<AvatarMatKey, SceneMaterial>>()
-        .init_resource::<AssetCache<AvatarMaskKey, MaskMaterial>>();
+        .init_resource::<AssetCache<AvatarMaskKey, MaskMaterial>>()
+        .init_resource::<crate::processing_timing::AvatarProcessingRun>();
     app.finish();
     app.cleanup();
     app
@@ -529,7 +530,7 @@ fn broken_body_gltf(app: &mut App, failure: BodyGltfFailure) -> Handle<Gltf> {
     }
 }
 
-fn usable_body_gltf(world: &mut World) -> Handle<Gltf> {
+pub(crate) fn usable_body_gltf(world: &mut World) -> Handle<Gltf> {
     let mut scene = World::new();
     let armature = scene
         .spawn((
@@ -550,7 +551,7 @@ fn usable_body_gltf(world: &mut World) -> Handle<Gltf> {
         .add(gltf_with_scene(Some(scene)))
 }
 
-fn register_test_body(world: &mut World, urn: WearableUrn, gltf: Handle<Gltf>) {
+pub(crate) fn register_test_body(world: &mut World, urn: WearableUrn, gltf: Handle<Gltf>) {
     world
         .run_system_once(move |mut wearables: CollectibleManager<Wearable>| {
             // The base body supplies all geometry; no default garment needs to resolve in this fixture.
@@ -603,7 +604,7 @@ fn test_wearable_data(urn: &WearableUrn) -> CollectibleData<Wearable> {
     }
 }
 
-fn avatar_build(world: &mut World, owner: Entity) -> Entity {
+pub(crate) fn avatar_build(world: &mut World, owner: Entity) -> Entity {
     world
         .query::<(Entity, &AvatarDefinition, &ChildOf)>()
         .iter(world)
@@ -878,6 +879,47 @@ fn an_exhausted_gltf_fallback_reports_terminal_error_to_the_scene_crdt() {
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].asset, other_body().as_str());
     assert!(errors[0].timestamp > 0);
+}
+
+#[test]
+fn a_hidden_players_avatar_takes_no_max_avatars_slot() {
+    let mut app = App::new();
+    app.init_resource::<AppConfig>();
+    app.world_mut().resource_mut::<AppConfig>().max_avatars = 1;
+    app.init_resource::<SessionGraphics>();
+    let world = app.world_mut();
+    world.spawn((PrimaryUser::default(), GlobalTransform::default()));
+    // a built avatar at `distance` from the player, under a player root shown or hidden
+    let mut avatar = |distance: f32, shown: InheritedVisibility| {
+        let root = world.spawn(shown).id();
+        world
+            .spawn((
+                AvatarProcessed,
+                GlobalTransform::from_translation(Vec3::X * distance),
+                Visibility::Inherited,
+                ChildOf(root),
+            ))
+            .id()
+    };
+    // the nearest is hidden for another reason, such as a block
+    let blocked = avatar(1.0, InheritedVisibility::HIDDEN);
+    let near = avatar(2.0, InheritedVisibility::VISIBLE);
+    let far = avatar(3.0, InheritedVisibility::VISIBLE);
+
+    world.run_system_once(set_avatar_visibility).unwrap();
+
+    let visibility = |entity| *world.get::<Visibility>(entity).unwrap();
+    assert_eq!(
+        visibility(near),
+        Visibility::Inherited,
+        "the one slot is its"
+    );
+    assert_eq!(visibility(far), Visibility::Hidden);
+    assert_eq!(
+        visibility(blocked),
+        Visibility::Inherited,
+        "the cap leaves it alone: its player hides it"
+    );
 }
 
 fn render_definition(avatar_outline: bool, disable_dither: bool) -> AvatarRenderDefinition {
