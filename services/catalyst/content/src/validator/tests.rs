@@ -467,12 +467,22 @@ impl Eip1654Validator for SignedAtEntityBlock {
         _: &[u8],
         block: u64,
     ) -> Result<bool, AuthError> {
-        Ok(block == ((ENTITY_MS / 1000 - fake_chain::GENESIS) / fake_chain::INTERVAL) as u64)
+        Ok(block == ENTITY_BLOCK)
+    }
+
+    /// The validator's own selector, asked only without an L1 RPC.
+    async fn verification_time_block(&self, _: i64) -> Result<Option<u64>, AuthError> {
+        Ok(Some(ENTITY_BLOCK))
     }
 }
 
+/// The last block strictly before `ENTITY_MS`: one is mined at that exact second.
+const ENTITY_BLOCK: u64 =
+    ((ENTITY_MS / 1000 - fake_chain::GENESIS) / fake_chain::INTERVAL) as u64 - 1;
+
 /// A local deploy's contract-wallet link refused at latest is asked again at the L1 block of
-/// the entity timestamp, as `@dcl/crypto` does; without an L1 RPC the refusal stands.
+/// the entity timestamp, as `@dcl/crypto` does; without an L1 RPC the validator's own selector
+/// picks the block.
 #[tokio::test]
 async fn a_contract_wallet_is_asked_at_the_entity_block_after_latest_refuses() {
     let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
@@ -506,10 +516,9 @@ async fn a_contract_wallet_is_asked_at_the_entity_block_after_latest_refuses() {
             ..mainnet()
         },
     );
-    let err = ExternalCalls::validate_signature(&without_l1, id, &auth, ENTITY_MS)
+    ExternalCalls::validate_signature(&without_l1, id, &auth, ENTITY_MS)
         .await
-        .unwrap_err();
-    assert!(matches!(err, AuthError::Eip1654Rejected { .. }), "{err}");
+        .unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

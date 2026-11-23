@@ -931,20 +931,20 @@ async fn a_block_read_is_asked_again_after_an_error_or_an_empty_answer() {
         fault(&chain, 2);
         assert_eq!(
             access(Some(&chain.url), None)
-                .l1_block_at(GENESIS_MS_BEFORE)
+                .l1_verification_block(GENESIS_MS_BEFORE)
                 .await
                 .unwrap(),
-            None,
+            1,
             "{what}"
         );
         assert_eq!(block_reads(&chain), 2 + 2, "{what}: the head read thrice");
         fault(&chain, 2);
         assert_eq!(
             access(Some(&chain.url), None)
-                .l1_block_at(TS)
+                .l1_verification_block(TS)
                 .await
                 .unwrap(),
-            Some(last),
+            last,
             "{what}"
         );
         fault(&chain, 2);
@@ -979,7 +979,7 @@ async fn a_block_the_rpc_never_answers_is_undecided_after_three_reads() {
         chain.clear();
         fault(&chain, usize::MAX);
         let err = access(Some(&chain.url), None)
-            .l1_block_at(TS)
+            .l1_verification_block(TS)
             .await
             .unwrap_err();
         assert!(
@@ -1025,7 +1025,7 @@ async fn only_a_block_read_that_may_succeed_is_asked_again() {
         chain.clear();
         chain.set_block_reply(status, body);
         let err = access(Some(&chain.url), None)
-            .l1_block_at(TS)
+            .l1_verification_block(TS)
             .await
             .unwrap_err();
         assert!(
@@ -1084,7 +1084,7 @@ async fn a_refused_endpoint_is_not_asked_again() {
         None,
     );
     let started = Instant::now();
-    let err = a.l1_block_at(TS).await.unwrap_err().to_string();
+    let err = a.l1_verification_block(TS).await.unwrap_err().to_string();
     assert!(err.contains("refused"), "{err}");
     assert!(
         started.elapsed() < Duration::from_millis(BLOCK_READ_BASE_MS),
@@ -1098,7 +1098,7 @@ async fn a_dropped_check_stops_reading_blocks() {
     let chain = fake_chain::serve(|_, _| Reply::Yes(true)).await;
     chain.fail_block_reads(usize::MAX);
     let a = access(Some(&chain.url), None).with_deadline(Duration::from_millis(50));
-    let err = a.l1_block_at(TS).await.unwrap_err();
+    let err = a.l1_verification_block(TS).await.unwrap_err();
     assert!(
         matches!(&err, ValidatorError::BlockchainQuery(m) if m.contains("did not finish")),
         "{err}"
@@ -1171,4 +1171,18 @@ async fn live_land_and_approved_item_on_mainnet() {
             .unwrap(),
         "the creator of an approved collection"
     );
+}
+
+/// As `Blocks.getDate(ts, false)`: the last block strictly before the timestamp, block 1
+/// before the first blocks.
+#[tokio::test]
+async fn the_verification_block_is_the_strict_predecessor() {
+    let chain = fake_chain::serve(|_, _| Reply::Yes(true)).await;
+    let a = access(Some(&chain.url), None);
+    // Block 10 is mined at `GENESIS + 20`.
+    let block_10_ms = (fake_chain::GENESIS + 20) * 1000;
+    assert_eq!(a.l1_verification_block(block_10_ms).await.unwrap(), 9);
+    assert_eq!(a.l1_verification_block(block_10_ms + 1).await.unwrap(), 10);
+    assert_eq!(a.l1_verification_block(GENESIS_MS_BEFORE).await.unwrap(), 1);
+    assert_eq!(a.l1_verification_block(i64::MIN).await.unwrap(), 1);
 }

@@ -12,9 +12,9 @@
 //! - the auth chain: expiry against the entity timestamp, an expiration that
 //!   parses as no known date kept as the peer's verdict, a contract-wallet
 //!   link asked of the node's EIP-1654 validator at the latest block, then
-//!   at the last block at or before the entity timestamp, as a local deploy
-//!   (no validator, a block search that fails, or an RPC that cannot answer
-//!   for that block: undecidable).
+//!   at the last L1 block strictly before the entity timestamp, as a local
+//!   deploy (no validator, no L1 RPC, a block search that fails, or an RPC
+//!   that cannot answer for that block: undecidable).
 //! - items, as the reference validator: no thumbnail check, and pointers
 //!   naming one collections-v1 asset by address and by name count as one.
 //! - a timestamp more than `REQUEST_TTL_FORWARDS_MS` ahead of this node's
@@ -41,7 +41,7 @@ use super::checker::{BlockchainChecker, BlockchainLayer};
 use super::error::{PermissionResult, ValidationError, ValidationResponse, ValidatorError};
 use super::rules::{ContentValidator, ExternalCalls};
 use super::types::{Deployment, Entity, Timestamp};
-use super::{Sources, entity_parser};
+use super::{AtEntityTime, Sources, WithoutL1, entity_parser};
 use crate::auth::verify::{ChainVerdict, verify_synced_auth_chain};
 use crate::auth::{AuthChain, AuthError, Eip1654Validator};
 
@@ -95,9 +95,10 @@ impl ExternalCalls for Synced<'_> {
         auth_chain: &AuthChain,
         timestamp: Timestamp,
     ) -> Result<(), AuthError> {
-        let at_block = self.sources.eip1654().map(|inner| AtEntityBlock {
+        let at_block = self.sources.eip1654().map(|inner| AtEntityTime {
             inner,
-            sources: self.sources,
+            access: &self.sources.access,
+            without_l1: WithoutL1::Undecidable,
         });
         let verdict = verify_synced_auth_chain(
             auth_chain,
@@ -110,49 +111,6 @@ impl ExternalCalls for Synced<'_> {
             trusted.extend(verdict.trusted_expirations);
         }
         Ok(())
-    }
-}
-
-/// The node's EIP-1654 validator, its historical block the last L1 block at or before the
-/// entity timestamp, found by the search the access checks share.
-struct AtEntityBlock<'a> {
-    inner: &'a dyn Eip1654Validator,
-    sources: &'a Sources,
-}
-
-#[async_trait]
-impl Eip1654Validator for AtEntityBlock<'_> {
-    async fn validate_signature(
-        &self,
-        contract_address: &str,
-        hash: &[u8],
-        signature: &[u8],
-    ) -> Result<bool, AuthError> {
-        self.inner
-            .validate_signature(contract_address, hash, signature)
-            .await
-    }
-
-    async fn validate_signature_at_block(
-        &self,
-        contract_address: &str,
-        hash: &[u8],
-        signature: &[u8],
-        block: u64,
-    ) -> Result<bool, AuthError> {
-        self.inner
-            .validate_signature_at_block(contract_address, hash, signature, block)
-            .await
-    }
-
-    /// A failed search, an unset L1 RPC included, is undecidable; before the first block the
-    /// latest answer stands.
-    async fn verification_time_block(&self, timestamp_ms: i64) -> Result<Option<u64>, AuthError> {
-        self.sources
-            .access
-            .l1_block_at(timestamp_ms)
-            .await
-            .map_err(|e| AuthError::Eip1654ValidationFailed(e.to_string()))
     }
 }
 
@@ -579,7 +537,11 @@ mod tests {
                 .await;
         let timestamp_ms = 1_700_000_000_500;
 
-        sources.access.l1_block_at(timestamp_ms).await.unwrap();
+        sources
+            .access
+            .l1_verification_block(timestamp_ms)
+            .await
+            .unwrap();
         chain.clear();
         synced
             .validate_signature(id, &auth, timestamp_ms)
@@ -598,15 +560,15 @@ mod tests {
         );
 
         let before_genesis = (GENESIS - 1) * 1000;
-        let err = synced
+        synced
             .validate_signature(id, &auth, before_genesis)
             .await
-            .unwrap_err();
-        assert!(
-            matches!(err, AuthError::Eip1654Rejected { .. }),
-            "no block yet: the latest refusal stands: {err}"
+            .unwrap();
+        assert_eq!(
+            *asks.0.lock().unwrap(),
+            [None, None, Some(1)],
+            "before the first blocks: block 1, as `@dcl/crypto`"
         );
-        assert_eq!(*asks.0.lock().unwrap(), [None, None]);
         let _ = std::fs::remove_dir_all(tmp);
     }
 
