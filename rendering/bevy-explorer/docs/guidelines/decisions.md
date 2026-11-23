@@ -99,7 +99,8 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   mostly gone on 2048 and all gone on 1024. With a low sun, past about 75 m the avatar's shadow
   was a smudge at the feet on 2048 and gone on 1024. 4096 costs under 1 ms at 100 m. So Low
   uses 4096 past 40 m (`sun_shadow_map_size`), where a 2048 texel is as large as a 4096 texel
-  at 80 m.
+  at 80 m. Spot-light shadows and the lobby stage light share the sun's shadow texture array,
+  so they are drawn at the same size.
 - **Sun shadows hold a floor past the shadow distance.** URP fades the shadow out completely at
   the shadow distance. We fade over the same squared-distance curve, but towards a partial
   shadow (`CASCADE_FAR_SHADOW` in `shadow_softening.wgsl`) that holds past the distance, so the
@@ -792,13 +793,12 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   the one every saved config migrates to, except jiggle bones, which stay off by default (see the
   spring bones ADR). Anti-aliasing and depth of field differ (next entry). Bloom is Low in every
   preset, closer to Unity's look than High. Medium's sun shadow distance is 20 m, not 60 m: Medium
-  has one cascade (above), so at 60 m each texel is three times as large as at 20 m on the same
-  map and the shadows break up. The presets leave out Unity's scene distance (in parcels, where
-  far scenes load as LODs; here imposters draw them and the load distance stays the player's),
-  the landscape distance (read only at startup; its default is Medium's 1000 m), current-scene
-  streams and HDR (always on). The preset is not stored: the HUD reads it off the settings, and
-  any difference
-  shows as Custom.
+  has one cascade (above), whose texels grow with the distance, and at 20 m it runs on the 2048
+  map, which looks the same as 4096 there and costs about 6 ms less a frame. The presets leave
+  out Unity's scene distance (in parcels, where far scenes load as LODs; here imposters draw
+  them and the load distance stays the player's), the landscape distance (read only at startup;
+  its default is Medium's 1000 m), current-scene streams and HDR (always on). The preset is not
+  stored: the HUD reads it off the settings, and any difference shows as Custom.
 - **Depth of field yields to MSAA.** The fork's transparent focus texture takes the sample count
   of the resolved main texture, so a multisampled transparent pass with depth of field fails
   wgpu validation. While MSAA is on, the camera has no depth of field and the stars draw before
