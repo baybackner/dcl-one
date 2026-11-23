@@ -310,14 +310,19 @@
       transform: none;
     }
   }
-  /* Forced colours drop both background bars and the pseudo-elements reserve the label widths, so the current
-     route takes a Highlight border; every route reserves it, so selection does not move the label. */
+  /* Forced colours drop both background bars. The current route's ::before already reserves its own (widest)
+     text, so its ::after is free to become the marker; out of flow, it changes neither the width nor the label. */
   @media (forced-colors: active) {
-    .routeRoot {
-      border-bottom: 4px solid transparent;
-    }
-    .routeRoot[aria-current='page'] {
-      border-bottom-color: Highlight;
+    .routeRoot[aria-current='page']::after {
+      content: '';
+      position: absolute;
+      right: 0;
+      bottom: var(--tab-underline-offset);
+      left: 0;
+      height: 4px;
+      background-color: Highlight;
+      forced-color-adjust: none;
+      visibility: visible;
     }
   }
 }

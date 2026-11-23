@@ -257,13 +257,7 @@ describe('when a tab is selected', () => {
         bar: { width: number; height: string; color: string; bottom: string }
       }[]
       disabled: string[]
-      route: {
-        width: number
-        border: string
-        borderColor: string
-        idle: string
-        idleBorder: string
-      }
+      idle: string
     }
     const read = () =>
       evaluate<Forced>(`(()=>{
@@ -275,28 +269,72 @@ describe('when a tab is selected', () => {
           return{width:tab.getBoundingClientRect().width,bar:{width:parseFloat(bar.width),height:bar.height,color:bar.backgroundColor,bottom:bar.bottom}}
         })
         const disabled=['underline','pill'].map(id=>getComputedStyle(document.querySelector('#'+id+' [role=tab]:disabled')).color)
-        const [idle,current]=[...document.querySelectorAll('#tabs a')].map(e=>getComputedStyle(e))
-        const link=document.querySelector('#tabs a[aria-current=page]')
-        return{system,panels,disabled,route:{width:link.getBoundingClientRect().width,border:current.borderBottomWidth,borderColor:current.borderBottomColor,idle:idle.color,idleBorder:idle.borderBottomWidth}}
+        return{system,panels,disabled,idle:getComputedStyle(document.querySelector('#tabs a:not([aria-current])')).color}
       })()`)
 
     it('should draw the selection in Highlight and keep the system colours of the tabs', async () => {
       await media([{ name: 'forced-colors', value: 'active' }])
       await ready(1440)
-      const { system, panels, disabled, route } = await read()
+      const { system, panels, disabled, idle } = await read()
       expect(system.Highlight).not.toBe(system.GrayText)
       for (const { width, bar } of panels) {
         expect(bar.width).toBeCloseTo(width, 3)
         expect(bar).toMatchObject({ height: '4px', color: system.Highlight, bottom: '0px' })
       }
       expect(disabled).toEqual([system.GrayText, system.GrayText])
-      expect(route).toMatchObject({
-        border: '4px',
-        borderColor: system.Highlight,
-        idle: system.LinkText,
-        idleBorder: '4px'
-      })
+      expect(idle).toBe(system.LinkText)
       await media([])
     })
+
+    // The colours a band of the page paints, read from a screenshot of it.
+    async function paint(band: { x: number; y: number; width: number; height: number }) {
+      const shot = await browser.session.send('Page.captureScreenshot', {
+        format: 'png',
+        clip: { ...band, scale: 1 }
+      })
+      const data = (shot as { data: string }).data
+      return evaluate<string[]>(`(async()=>{
+        const img=new Image();img.src='data:image/png;base64,${data}';await img.decode()
+        const c=document.createElement('canvas');c.width=img.width;c.height=img.height
+        const g=c.getContext('2d');g.drawImage(img,0,0);const d=g.getImageData(0,0,c.width,c.height).data
+        const seen=new Set();for(let i=0;i<d.length;i+=4)seen.add(d[i]+','+d[i+1]+','+d[i+2]);return[...seen].sort()
+      })()`)
+    }
+    type Route = {
+      link: { x: number; y: number; width: number; height: number }
+      label: { x: number; y: number; width: number; height: number }
+      offset: number
+    }
+    const routes = () =>
+      evaluate<Route[]>(
+        `[...document.querySelectorAll('#tabs a')].map(a=>{const box=r=>({x:r.x,y:r.y,width:r.width,height:r.height});return{link:box(a.getBoundingClientRect()),label:box(a.querySelector('span').getBoundingClientRect()),offset:parseFloat(getComputedStyle(a).getPropertyValue('--tab-underline-offset'))}})`
+      )
+
+    for (const width of [390, 1440])
+      it(`should mark only the current route, without moving any label, at ${width}`, async () => {
+        await media([])
+        await ready(width)
+        const base = await routes()
+        await media([{ name: 'forced-colors', value: 'active' }])
+        await ready(width)
+        const forced = await routes()
+        expect(forced).toEqual(base)
+        const [idle, current] = forced
+        const band = ({ link, offset }: Route, top = false) => ({
+          x: link.x + 1,
+          y: top ? link.y : link.y + link.height - offset - 4,
+          width: link.width - 2,
+          height: 4
+        })
+        // The idle route paints its bar band exactly as its empty top edge: no bar.
+        const empty = await paint(band(idle!, true))
+        expect(empty).toHaveLength(1)
+        expect(await paint(band(idle!))).toEqual(empty)
+        // The current route paints one colour across the band, and it is not the background.
+        const marker = await paint(band(current!))
+        expect(marker).toHaveLength(1)
+        expect(marker).not.toEqual(empty)
+        await media([])
+      })
   })
 })
