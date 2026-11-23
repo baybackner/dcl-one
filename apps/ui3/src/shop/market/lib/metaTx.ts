@@ -15,7 +15,7 @@ import { relayRefusal, type RelayRefusal } from "../../checkout/chain/metatx";
 import { pageOverride } from "../../pageOverride";
 import type { ContractData } from "@shop/market/lib/contracts";
 import { rpc } from "./rpc";
-import { chainSalt, signTypedData, walletAccount, WalletAccountChangedError } from "./tx";
+import { bounded, chainSalt, signTypedData, walletAccount, WalletAccountChangedError } from "./tx";
 
 const NONCE_ABI = parseAbi(["function getNonce(address user) view returns (uint256 nonce)"]);
 const EXECUTE_ABI = parseAbi([
@@ -112,11 +112,14 @@ export async function sendMetaTransaction(opts: {
    * prompt, and a signature by another account is never posted.
    */
   account?: string;
+  /** Bound on the account and nonce reads before the prompt: a late answer ends the write unprompted and unposted. */
+  readTimeoutMs?: number;
 }): Promise<string> {
-  const from = await walletAccount(opts.provider);
+  const read = <T>(r: Promise<T>) => (opts.readTimeoutMs ? bounded(r, opts.readTimeoutMs) : r);
+  const from = await read(walletAccount(opts.provider));
   const expected = opts.account?.toLowerCase();
   if (expected && from !== expected) throw new WalletAccountChangedError();
-  const nonce = opts.nonce ?? (await readNonce(opts.contract, from));
+  const nonce = opts.nonce ?? (await read(readNonce(opts.contract, from)));
   const typed = metaTransactionTypedData(opts.contract, opts.kind, from, nonce, opts.functionData);
   const signature = await signTypedData(opts.provider, from, typed);
   if (expected) {

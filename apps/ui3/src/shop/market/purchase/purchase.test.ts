@@ -8,7 +8,7 @@ import { WrongNetworkError } from "../../wallet/chain";
 import { LEGACY_BID_ROW, RECEIVED_BIDS, MANA } from "../fixtures";
 import { COLLECTION_V2_ABI, ERC20_ABI, ERC721_ABI, LEGACY_ACCEPT_BID_ABI, LEGACY_MARKETPLACE, LEGACY_MARKETPLACE_ABI, latestOffChainMarketplace, MARKETPLACE_ABI, manaToken } from "@shop/market/lib/contracts";
 import { createManaListing, createUsdPeggedListing, type Trade } from "../lib/trades";
-import { fakeChain, fakeWallet, noWait } from "../testing";
+import { fakeChain, fakeWallet, noWait, STALL } from "../testing";
 import { archiveBid, archivedBidIds, resetArchivedBidsForTests, unarchiveBid } from "../store/archivedBids";
 import { acceptBid, cancelBid, isBidTrade, placeBid } from "./bids";
 import { buyTradeWithMana, executeLegacyOrder, manaAllowanceFor } from "./executeOrder";
@@ -210,6 +210,7 @@ describe("a MANA approval still confirming", () => {
   const approvalHash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
   let allowance = 0n;
   let allowanceDown = false;
+  let nonceStalled = false;
   const pending = new Set<string>();
   const reverted = new Set<string>();
   const stalled = new Set<string>();
@@ -219,6 +220,7 @@ describe("a MANA approval still confirming", () => {
   beforeEach(() => {
     allowance = 0n;
     allowanceDown = false;
+    nonceStalled = false;
     pending.clear();
     reverted.clear();
     stalled.clear();
@@ -234,6 +236,7 @@ describe("a MANA approval still confirming", () => {
         [MANA_POLYGON]: {
           abi: [...ERC20_ABI, ...COLLECTION_V2_ABI],
           answer: (fn) => {
+            if (fn === "getNonce" && nonceStalled) return STALL;
             if (fn !== "allowance") return 0n;
             if (allowanceDown) throw new Error("the RPC is down");
             return allowance;
@@ -246,11 +249,15 @@ describe("a MANA approval still confirming", () => {
     });
   });
 
-  /** A wallet whose account can change (or disconnect) between two purchases. */
+  /** A wallet whose account can change (or disconnect, or stop answering its account) between two purchases. */
   function switchable(first = fakeWallet()) {
-    const box: { current: ReturnType<typeof fakeWallet> | null } = { current: first };
+    const box: { current: ReturnType<typeof fakeWallet> | null; stallAccounts: boolean } = { current: first, stallAccounts: false };
     const provider: Eip1193Provider = {
-      request: (args) => (box.current ? box.current.request(args) : args.method === "eth_accounts" ? Promise.resolve([]) : Promise.reject(new Error("disconnected"))),
+      request: (args) => {
+        if (box.stallAccounts && args.method === "eth_accounts") return new Promise(() => {});
+        if (box.current) return box.current.request(args);
+        return args.method === "eth_accounts" ? Promise.resolve([]) : Promise.reject(new Error("disconnected"));
+      },
     } as Eip1193Provider;
     return { provider, box };
   }
@@ -270,6 +277,68 @@ describe("a MANA approval still confirming", () => {
     expect(second).toMatchObject({ status: "rejected", reason: { name: "WalletAccountChangedError" } });
     expect(relayed).toHaveLength(1);
     expect(other.signed).toHaveLength(0);
+  });
+
+  it("a legacy order whose wallet switched accounts after its approval went out sends no sale from the other account", async () => {
+    const { provider, box } = switchable();
+    const other = fakeWallet({ key: `0x${"9".repeat(64)}` });
+    onRelay = () => {
+      box.current = other;
+    };
+    const venue = LEGACY_MARKETPLACE[CHAIN.POLYGON]!.address;
+    const order = { contractAddress: BOOK.collection, tokenId: "42", price: AMOUNT.toString(), chainId: CHAIN.POLYGON, marketplaceAddress: venue };
+    const err = await executeLegacyOrder({ provider, order, wait: noWait }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ name: "WalletAccountChangedError", approvalSent: true });
+    expect(relayed).toHaveLength(1);
+    expect(other.sent).toHaveLength(0);
+    expect(purchaseFailure(err, null)).toEqual({ kind: "error", message: expect.stringMatching(/approval went out.*nothing was bought/) });
+  });
+
+  it("a trade whose wallet switched accounts after its approval went out sends no accept from the other account", async () => {
+    restore?.();
+    restore = fakeChain({
+      contracts: {
+        [MARKET]: { abi: MARKETPLACE_ABI, answer: () => 0n },
+        [MANA_POLYGON]: { abi: [...ERC20_ABI, ...COLLECTION_V2_ABI], answer: (fn) => (fn === "allowance" ? allowance : 0n) },
+      },
+    });
+    const creation = await createManaListing({
+      provider: fakeWallet({ key: `0x${"7".repeat(64)}` }),
+      nft: { contractAddress: BOOK.collection, tokenId: "42", chainId: CHAIN.POLYGON },
+      priceWei: AMOUNT,
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const trade: Trade = { ...creation, id: "t", contract: MARKET };
+    const { provider, box } = switchable();
+    const other = fakeWallet({ key: `0x${"9".repeat(64)}` });
+    onRelay = () => {
+      box.current = other;
+    };
+    const err = await buyTradeWithMana({ provider, trade, wait: noWait }).catch((e: unknown) => e);
+    expect(err).toMatchObject({ name: "WalletAccountChangedError", approvalSent: true });
+    expect(relayed).toHaveLength(1);
+    expect(other.sent).toHaveLength(0);
+  });
+
+  it("a nonce read that never answers ends the approval unprompted and unsent, and frees the next purchase", async () => {
+    nonceStalled = true;
+    const wallet = fakeWallet();
+    await expect(approve(wallet, AMOUNT, quick)).rejects.toMatchObject({ name: "ReadTimeoutError" });
+    expect(wallet.signed).toHaveLength(0);
+    expect(relayed).toHaveLength(0);
+    nonceStalled = false;
+    await expect(approve(wallet, AMOUNT, quick)).resolves.toBe(approvalHash(1));
+  });
+
+  it("an account read that never answers when a queued purchase starts ends that purchase unsent", async () => {
+    const { provider, box } = switchable();
+    onRelay = () => {
+      box.stallAccounts = true;
+    };
+    const [first, second] = await Promise.allSettled([approve(provider, AMOUNT, quick), approve(provider, AMOUNT, quick)]);
+    expect(first).toMatchObject({ status: "fulfilled", value: approvalHash(1) });
+    expect(second).toMatchObject({ status: "rejected", reason: { name: "ReadTimeoutError" } });
+    expect(relayed).toHaveLength(1);
   });
 
   it("a purchase queued behind another ends unsent once the wallet disconnected", async () => {

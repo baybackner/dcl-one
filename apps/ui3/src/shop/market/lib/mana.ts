@@ -84,15 +84,20 @@ export async function ensureManaAllowance(opts: {
   spender: string;
   amount: bigint;
   wait?: WaitOptions;
+  /** The buyer the caller's purchase is bound to; the wallet's account when absent. */
+  owner?: string;
 }): Promise<string | null> {
-  const owner = await walletAccount(opts.provider);
+  const ms = opts.wait?.readTimeoutMs ?? READ_TIMEOUT_MS;
+  const current = await bounded(walletAccount(opts.provider), ms);
+  const owner = opts.owner?.toLowerCase() ?? current;
+  if (current !== owner) throw new WalletAccountChangedError();
   const key = approvalKey(opts.chainId, owner, opts.spender);
   return serialized(key, () => decideApproval(opts, owner, key));
 }
 
-/** Throws unless the wallet is still on `owner` (a disconnected wallet throws walletAccount's own error). */
-async function stillOn(provider: Eip1193Provider, owner: string): Promise<void> {
-  if ((await walletAccount(provider)) !== owner) throw new WalletAccountChangedError();
+/** Throws unless the wallet is still on `owner`, read within `ms` (a disconnected wallet throws walletAccount's own error). */
+async function stillOn(provider: Eip1193Provider, owner: string, ms: number): Promise<void> {
+  if ((await bounded(walletAccount(provider), ms)) !== owner) throw new WalletAccountChangedError();
 }
 
 async function decideApproval(
@@ -100,15 +105,15 @@ async function decideApproval(
   owner: string,
   key: string,
 ): Promise<string | null> {
-  await stillOn(opts.provider, owner);
   const ms = opts.wait?.readTimeoutMs ?? READ_TIMEOUT_MS;
+  await stillOn(opts.provider, owner, ms);
   const covered = () => bounded(hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount), ms);
   const earlier = unconfirmedApprovals.get(key);
   if (earlier) {
     if ((await approvalOutcome(opts.chainId, earlier, ms)) === "unknown") {
       // A covering allowance lets this purchase pass, but says nothing about the earlier approval: it stays recorded.
       if (await covered().catch(() => false)) {
-        await stillOn(opts.provider, owner);
+        await stillOn(opts.provider, owner, ms);
         return null;
       }
       throw new TxPendingError(earlier, "The MANA approval");
@@ -123,7 +128,7 @@ async function decideApproval(
     throw new Error("We couldn't read your MANA allowance. Nothing was sent; try again in a moment.");
   }
   if (enough) {
-    await stillOn(opts.provider, owner);
+    await stillOn(opts.provider, owner, ms);
     return null;
   }
   const mana = manaToken(opts.chainId);
@@ -134,8 +139,9 @@ async function decideApproval(
         kind: "collection",
         functionData: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [opts.spender as `0x${string}`, opts.amount] }),
         account: owner,
+        readTimeoutMs: ms,
       })
-    : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount], account: owner });
+    : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount], account: owner, readTimeoutMs: ms });
   unconfirmedApprovals.set(key, hash);
   try {
     const confirmed = await waitForReceipt(opts.chainId, hash, "The MANA approval", opts.wait);

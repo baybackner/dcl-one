@@ -43,22 +43,39 @@ export const APPROVAL_STILL_PENDING = "Your MANA approval is still confirming, s
 /** A buy dialog's answer when the MANA approval reverted: the sale was never sent. */
 export const APPROVAL_REVERTED = "Your MANA approval failed on-chain, so nothing was bought. Buy again to send a new one.";
 
-/** The wallet is no longer on the account a write was decided for: nothing was signed or sent. */
+/**
+ * The wallet is no longer on the account a write was decided for: that write was not signed or sent. `approvalSent`
+ * says a MANA approval had already gone out for the purchase it stopped.
+ */
 export class WalletAccountChangedError extends Error {
   override name = "WalletAccountChangedError";
-  constructor() {
-    super("Your wallet switched accounts during the purchase. Nothing was sent; switch back to the account you started with and try again.");
+  readonly approvalSent: boolean;
+  constructor(opts: { approvalSent?: boolean } = {}) {
+    super(
+      opts.approvalSent
+        ? "Your MANA approval went out, but your wallet then switched accounts, so the purchase stopped before it was sent and nothing was bought. Switch back to the account you started with and buy again."
+        : "Your wallet switched accounts during the purchase. Nothing was sent; switch back to the account you started with and try again.",
+    );
+    this.approvalSent = !!opts.approvalSent;
   }
 }
 
 /** How long one chain read may take before it counts as a failed read. */
 export const READ_TIMEOUT_MS = 15_000;
 
-/** `read`, or a rejection once `ms` have passed without an answer (the read itself is left to finish). */
+/** A wallet or chain read that did not answer in time: the step waiting on it went no further. */
+export class ReadTimeoutError extends Error {
+  override name = "ReadTimeoutError";
+  constructor() {
+    super("Your wallet or the network took too long to answer, so this step was not sent. Try again in a moment.");
+  }
+}
+
+/** `read`, or a ReadTimeoutError once `ms` have passed without an answer (the read itself is left to finish). */
 export function bounded<T>(read: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("The read took too long.")), ms);
+    timer = setTimeout(() => reject(new ReadTimeoutError()), ms);
   });
   return Promise.race([read, late]).finally(() => clearTimeout(timer));
 }
@@ -106,12 +123,15 @@ export type WriteCall = {
   value?: bigint;
   /** The account this call was decided for: another one on the wallet throws WalletAccountChangedError, unprompted. */
   account?: string;
+  /** Bound on the wallet's network and account reads before the prompt: a late answer ends the call unprompted. */
+  readTimeoutMs?: number;
 };
 
 /** Sends one contract call from the wallet. Throws WrongNetworkError without prompting on another chain. */
 export async function sendCall(provider: Eip1193Provider, call: WriteCall): Promise<string> {
-  await requireChain(provider, call.chainId);
-  const from = await walletAccount(provider);
+  const read = <T>(r: Promise<T>) => (call.readTimeoutMs ? bounded(r, call.readTimeoutMs) : r);
+  await read(requireChain(provider, call.chainId));
+  const from = await read(walletAccount(provider));
   if (call.account && from !== call.account.toLowerCase()) throw new WalletAccountChangedError();
   const data = encodeFunctionData({ abi: call.abi, functionName: call.functionName, args: call.args } as never);
   const tx: Record<string, string> = { from, to: call.to, data };

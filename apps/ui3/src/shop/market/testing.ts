@@ -73,6 +73,9 @@ export function fakeWallet(opts: { key?: Hex; chainId?: number } = {}): FakeWall
   return wallet;
 }
 
+/** A stub's answer that never comes: the read stalls (an RPC that does not respond). */
+export const STALL = Symbol("stall");
+
 export type ContractStub = { abi: Abi; answer: (functionName: string, args: readonly unknown[]) => unknown };
 
 /**
@@ -96,6 +99,7 @@ export function fakeChain(opts: {
       if (!stub) throw new Error(`no stub for ${to}`);
       const decoded = decodeFunctionData({ abi: stub.abi, data });
       const result = stub.answer(decoded.functionName, decoded.args ?? []);
+      if (result === STALL) return new Promise(() => {});
       return encodeFunctionResult({ abi: stub.abi, functionName: decoded.functionName, result } as never);
     }
     if (method === "eth_getTransactionReceipt") {
