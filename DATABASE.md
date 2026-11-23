@@ -1672,55 +1672,53 @@ gains it from the object pass, so no step exists.
 `credits.iap_transactions` (`schemas/60_ops.sql`) holds one row per App Store
 transaction, keyed by Apple's transaction id (`shop/src/credits/iap.rs`).
 Writers are the App Store notification (`POST /credits/apple/webhook`), the
-device's `POST /credits/credits/iap/verify` and the operator's
-`POST /credits/credits/iap` (a credit), and the notification's `REFUND` and
+device's `POST /credits/credits/iap/verify` and the operator's `POST
+/credits/credits/iap` (a credit), and the notification's `REFUND` and
 `REFUND_REVERSED` and the operator's `POST /credits/credits/iap/refund` and
-`POST /credits/credits/iap/reversal` (a refund and its undo). A credit takes
-a transaction-scoped advisory lock on the transaction id, then the node-wide
-App Store lock, reads the caps over the wallet's rows and the node's last 24
+`POST /credits/credits/iap/reversal` (a refund and its undo). A credit takes a
+transaction-scoped advisory lock on the transaction id, then the node-wide App
+Store lock, reads the caps over the wallet's rows and the node's last 24
 hours, inserts the row and grants the Credits in one transaction. A paid
 purchase it cannot credit (a cap, the node's ceiling, an unknown product or
 quantity, an account token naming no wallet) is upserted as `held` with its
 reason, unless an operator asked; a later delivery or an operator credit
-re-checks a held row and turns it `paid` in place (an operator credit with
-the held row's product and quantity only), keeping its account token,
-original transaction id and refund references; its `created_at` becomes the
-credit's time, so the 24-hour caps count it.
-A reversal takes the same transaction lock, then locks the wallet row before
-the transaction's row (the order of an operator block and a card reversal),
-flips the row to `refunded` (an `imported` row keeps its status and
-`refunded_at` marks the refund),
-charges back the Credits or Apple's refunded share (`Credits::revoke_in_tx`),
-records its reference (notification uuid or operator refund id) in
-`refund_refs`, which a reversal keeps, so a redelivered refund applies once
-(a transaction is charged back once, as credits-server does: a refund under
-another reference of a row already refunded is recorded and logged, not
-charged back again),
+re-checks a held row and turns it `paid` in place (an operator credit with the
+held row's product and quantity only), keeping its account token, original
+transaction id and refund references; its `created_at` becomes the credit's
+time, so the 24-hour caps count it. A reversal takes the same transaction
+lock, then locks the wallet row before the transaction's row (the order of an
+operator block and a card reversal), flips the row to `refunded` (an
+`imported` row keeps its status and `refunded_at` marks the refund), charges
+back the Credits or Apple's refunded share (`Credits::revoke_in_tx`), records
+its reference (notification uuid or operator refund id) in `refund_refs`,
+which a reversal keeps, so a redelivered refund applies once (a transaction is
+charged back once, as credits-server does: a refund under another reference of
+a row already refunded is recorded and logged, not charged back again),
 records what was removed in `revoked_credits` and the refunded USD in
-`refunded_cents` and, when the balance net of
-live pledges cannot cover it, queues the wallet's newest unexpired signed
-credits not queued yet that pledge beyond the balance in `credits.revocations`
-(reason `reversed:apple-iap:<transaction id>`) and records in `raised_block`
-whether it blocked the wallet, in one transaction. An operator's block or
-unblock, or a later reversal the balance cannot cover, clears the wallet's
-`raised_block` flags, so the block is no longer lifted by a reversal. `REFUND_REVERSED` grants
-`revoked_credits` back (a `refund` ledger row, idempotent per refund undone:
-key `apple-iap:<transaction id>:reinstated:<refund reference>`), deletes its revocations still
-`pending` and unclaimed (`attempts = 0`; the revocation job counts the attempt
-before it broadcasts) when `available` covers the unexpired credits that leaves
-unqueued (a claimed or sent one is final: a broadcast that failed before it
-reached the chain still counts its attempt, so that revocation is never
-withdrawn), lifts the block it raised when `available`
-covers the wallet's live pledges (an `ops.admin_audit` `user.unblock` row),
-and returns the row to `paid` (or clears an `imported` row's refund).
-A `refunded` row never credited (not an imported upstream marker) becomes
-`held` (`refund_reversed`) and commits before the credit runs in its own
-transaction, so a credit that fails leaves the purchase held, and a
-redelivery credits it. Readers are the wallet's credit
-orders (`address, created_at DESC`, rows this node credited), the caps
-(`address` and `created_at` partial indexes; rows credited here or
-`imported`) and the operator's held list (`GET /credits/credits/iap/held`,
-the `status = 'held'` partial index). Rows are one per purchase.
+`refunded_cents` and, when the balance net of live pledges cannot cover it,
+queues the wallet's newest unexpired signed credits not queued yet that pledge
+beyond the balance in `credits.revocations` (reason
+`reversed:apple-iap:<transaction id>`) and records in `raised_block` whether
+it blocked the wallet, in one transaction. An operator's block or unblock, or
+a later reversal the balance cannot cover, clears the wallet's `raised_block`
+flags, so the block is no longer lifted by a reversal. `REFUND_REVERSED`
+grants `revoked_credits` back (a `refund` ledger row, idempotent per refund
+undone: key `apple-iap:<transaction id>:reinstated:<refund reference>`),
+deletes its revocations still `pending` and unclaimed (`attempts = 0`; the
+revocation job counts the attempt before it broadcasts) when `available`
+covers the unexpired credits that leaves unqueued (a claimed or sent one is
+final: a broadcast that failed before it reached the chain still counts its
+attempt, so that revocation is never withdrawn), lifts the block it raised
+when `available` covers the wallet's live pledges (an `ops.admin_audit`
+`user.unblock` row), and returns the row to `paid` (or clears an `imported`
+row's refund). A `refunded` row never credited (not an imported upstream
+marker) becomes `held` (`refund_reversed`) and commits before the credit runs
+in its own transaction, so a credit that fails leaves the purchase held, and a
+redelivery credits it. Readers are the wallet's credit orders (`address,
+created_at DESC`, rows this node credited), the caps (`address` and
+`created_at` partial indexes; rows credited here or `imported`) and the
+operator's held list (`GET /credits/credits/iap/held`, the `status = 'held'`
+partial index). Rows are one per purchase.
 
 The credit's `grant`, the charge-back's `revoke` and the reversal's `grant`
 and `user.unblock` rows in `ops.admin_audit` name who applied them: an
@@ -1743,16 +1741,16 @@ App Store transaction as `imported` with its wallet, cents and upstream time
 (counted by the caps, charged back by a later refund) and any other as a
 `refunded` row without a wallet (`refund_ref` `credits-server`, which an
 operator refund id cannot take), and copies the account tokens, all
-insert-only, so a purchase credited upstream is never credited again. It reads after upstream's
-App Store routes stop writing.
+insert-only, so a purchase credited upstream is never credited again. It
+reads after upstream's App Store routes stop writing.
 
-Invariants: a transaction id credits at most once and never after a refund;
-a notification's or device's refund of a transaction never credited, or a
+Invariants: a transaction id credits at most once and never after a refund; a
+notification's or device's refund of a transaction never credited, or a
 transaction revoked when first seen, leaves a `refunded` row, so its later
-delivery credits nothing (an operator refund of an unknown id records
-nothing and answers 404; of a held one, turns it `refunded`). The Credits come from the product in Apple's signed
-transaction (`IAP_PRODUCT_CATALOG_USD`, whole Credits), never from the
-request. `revoked_credits` never exceeds `credits`.
+delivery credits nothing (an operator refund of an unknown id records nothing
+and answers 404; of a held one, turns it `refunded`). The Credits come from
+the product in Apple's signed transaction (`IAP_PRODUCT_CATALOG_USD`, whole
+Credits), never from the request. `revoked_credits` never exceeds `credits`.
 
 `credits.iap_notifications` holds one row per App Store notification applied,
 keyed by its `notificationUUID`, with its `signedDate` (`signed_at`). The

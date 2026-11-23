@@ -61,13 +61,13 @@
 //! Apple's is written even when the purchase is not refunded or has no row
 //! yet. Decisions are ordered by `signedDate`, then by notification uuid
 //! (bytewise), so two signed in the same millisecond end the same in either
-//! delivery order. A
-//! refund or reversal ordered before the recorded decision is stale: it is
-//! recorded under its uuid and applies nothing, so a reversal delivered
-//! before its refund keeps that refund from charging the wallet. An operator
-//! refund is not signed by Apple and records nothing; it is refused while
-//! the latest decision is a reversal unless the operator overrides it. A
-//! revoked transaction signed before a recorded reversal applies nothing.
+//! delivery order. A refund or reversal ordered before the recorded decision
+//! is stale: it is recorded under its uuid and applies nothing, so a reversal
+//! delivered before its refund keeps that refund from charging the wallet.
+//! An operator refund is not signed by Apple and records nothing; it is
+//! refused while the latest decision is a reversal unless the operator
+//! overrides it. A revoked transaction signed before a recorded reversal
+//! applies nothing.
 //! An operator reversal (`/admin/iap/reversals`) undoes a refund as Apple's
 //! does, for a `REFUND_REVERSED` too old to deliver: it names that
 //! reversal's `signedDate`, is ordered against the recorded decision like
@@ -225,6 +225,32 @@ pub fn parse_catalog(raw: &str) -> anyhow::Result<HashMap<String, i64>> {
         .collect()
 }
 
+/// Who an app store write is audited as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Actor<'a> {
+    Apple,
+    /// An admin, by its `audit_actor_description()`.
+    Operator(&'a str),
+}
+
+impl<'a> Actor<'a> {
+    /// The audit and ledger actor.
+    fn name(self) -> &'a str {
+        match self {
+            Self::Apple => IAP_ACTOR,
+            Self::Operator(actor) => actor,
+        }
+    }
+
+    /// The audit detail's `source`.
+    fn source(self) -> &'static str {
+        match self {
+            Self::Apple => "apple",
+            Self::Operator(_) => "operator",
+        }
+    }
+}
+
 /// Which path credited a transaction (`credits.iap_transactions.credited_by`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel<'a> {
@@ -243,18 +269,10 @@ impl<'a> Channel<'a> {
         }
     }
 
-    fn actor(self) -> &'a str {
+    fn actor(self) -> Actor<'a> {
         match self {
-            Self::Operator(actor) => actor,
-            Self::Notification | Self::Device => IAP_ACTOR,
-        }
-    }
-
-    /// The audit detail's `source`.
-    fn source(self) -> &'static str {
-        match self {
-            Self::Operator(_) => "operator",
-            Self::Notification | Self::Device => "apple",
+            Self::Operator(actor) => Actor::Operator(actor),
+            Self::Notification | Self::Device => Actor::Apple,
         }
     }
 }
@@ -280,19 +298,10 @@ impl<'a> Refunder<'a> {
         }
     }
 
-    /// The revoke's audit actor.
-    fn actor(self) -> &'a str {
+    fn actor(self) -> Actor<'a> {
         match self {
-            Self::Apple(_) => IAP_ACTOR,
-            Self::Operator { actor, .. } => actor,
-        }
-    }
-
-    /// The audit detail's `source`.
-    fn source(self) -> &'static str {
-        match self {
-            Self::Apple(_) => "apple",
-            Self::Operator { .. } => "operator",
+            Self::Apple(_) => Actor::Apple,
+            Self::Operator { actor, .. } => Actor::Operator(actor),
         }
     }
 }
@@ -334,18 +343,10 @@ impl<'a> Reverser<'a> {
         }
     }
 
-    fn actor(self) -> &'a str {
+    fn actor(self) -> Actor<'a> {
         match self {
-            Self::Apple(_) => IAP_ACTOR,
-            Self::Operator { actor, .. } => actor,
-        }
-    }
-
-    /// The audit detail's `source`.
-    fn source(self) -> &'static str {
-        match self {
-            Self::Apple(_) => "apple",
-            Self::Operator { .. } => "operator",
+            Self::Apple(_) => Actor::Apple,
+            Self::Operator { actor, .. } => Actor::Operator(actor),
         }
     }
 }
@@ -832,7 +833,7 @@ impl Credits {
             return Err(ApiError::conflict("this transaction is already settled"));
         }
         let detail = json!({
-            "source": p.channel.source(),
+            "source": p.channel.actor().source(),
             "transactionId": p.transaction_id,
             "productId": p.product_id,
             "quantity": quantity,
@@ -846,7 +847,7 @@ impl Credits {
                 amount: &credits.to_string(),
                 kind: "purchase",
                 reason: Some("app store purchase"),
-                actor: Some(p.channel.actor()),
+                actor: Some(p.channel.actor().name()),
                 idempotency_key: Some(&key),
                 detail: &detail,
                 studio_name: None,
@@ -949,7 +950,7 @@ impl Credits {
                 .await?;
                 // Nothing was credited, so no revoke records the operator's refund.
                 if let Refunder::Operator { actor, .. } = by {
-                    let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref, "reason": reason, "held": true });
+                    let detail = json!({ "source": by.actor().source(), "transactionId": transaction_id, "refundRef": refund_ref, "reason": reason, "held": true });
                     Self::audit(
                         &mut *tx,
                         super::store::AuditEntry {
@@ -1023,7 +1024,13 @@ impl Credits {
         if super::money::CreditAmount::parse_positive(charged).is_err() {
             // Nothing to revoke: the operator's refund is still recorded.
             if let Refunder::Operator { actor, .. } = by {
-                let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref, "reason": reason, "txRef": grant_key(transaction_id), "chargedBack": "0", "removed": "0", "shortfall": "0", "amount": "0" });
+                let base = json!({
+                    "source": by.actor().source(),
+                    "transactionId": transaction_id,
+                    "refundRef": refund_ref,
+                });
+                let tx_ref = grant_key(transaction_id);
+                let detail = super::wallet::revoke_detail(&base, &tx_ref, "0", "0", "0", reason);
                 Self::audit(
                     &mut *tx,
                     super::store::AuditEntry {
@@ -1043,7 +1050,7 @@ impl Credits {
                 revocations: 0,
             });
         }
-        let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": refund_ref });
+        let detail = json!({ "source": by.actor().source(), "transactionId": transaction_id, "refundRef": refund_ref });
         let was_blocked: Option<bool> = sqlx::query_scalar(
             "SELECT is_blocked_for_claiming FROM credits.wallets WHERE address = $1 FOR UPDATE",
         )
@@ -1058,7 +1065,7 @@ impl Credits {
                 &grant_key(transaction_id),
                 reason,
                 &detail,
-                by.actor(),
+                by.actor().name(),
             )
             .await?;
         // What was actually removed: a reversed refund grants back this, not the shortfall.
@@ -1131,7 +1138,7 @@ impl Credits {
         // so it never makes a later Apple refund stale. Apple's is recorded
         // either way: a reversal delivered before its refund must still order it.
         if let Reverser::Operator { .. } = by
-            && !matches!(undo, Undo::Rehold | Undo::Grant { .. })
+            && !matches!(undo, Undo::Rehold { .. } | Undo::Grant { .. })
         {
             tx.rollback().await?;
             return Ok(match undo {
@@ -1163,7 +1170,10 @@ impl Credits {
                 tx.commit().await?;
                 return Ok(ReinstateOutcome::NotRefunded);
             }
-            Undo::Rehold => {
+            Undo::Rehold {
+                address,
+                undone_refund_ref,
+            } => {
                 // Held, not deleted: a failed credit after this commit leaves the purchase held.
                 sqlx::query(
                     "UPDATE credits.iap_transactions \
@@ -1176,11 +1186,10 @@ impl Credits {
                 .execute(&mut *tx)
                 .await?;
                 if let Reverser::Operator { actor, .. } = by {
-                    let row = row.as_ref();
                     let detail = json!({
-                        "source": by.source(),
+                        "source": by.actor().source(),
                         "transactionId": transaction_id,
-                        "refundRef": row.and_then(|r| r.get::<Option<String>, _>("undone_refund_ref")),
+                        "refundRef": undone_refund_ref,
                         "reversalRef": reversal_ref,
                         "held": true,
                     });
@@ -1189,9 +1198,7 @@ impl Credits {
                         super::store::AuditEntry {
                             action: "iap.hold",
                             actor,
-                            target: row
-                                .and_then(|r| r.get::<Option<String>, _>("address"))
-                                .as_deref(),
+                            target: address.as_deref(),
                             detail: &detail,
                         },
                     )
@@ -1229,7 +1236,7 @@ impl Credits {
                 "{}:reinstated:{undone_refund_ref}",
                 grant_key(transaction_id)
             );
-            let detail = json!({ "source": by.source(), "transactionId": transaction_id, "refundRef": undone_refund_ref, "reversalRef": reversal_ref });
+            let detail = json!({ "source": by.actor().source(), "transactionId": transaction_id, "refundRef": undone_refund_ref, "reversalRef": reversal_ref });
             let granted = self
                 .admin_grant_credits_in_tx(
                     &mut tx,
@@ -1238,7 +1245,7 @@ impl Credits {
                         amount: &credits,
                         kind: "refund",
                         reason: Some("app store refund reversed"),
-                        actor: Some(by.actor()),
+                        actor: Some(by.actor().name()),
                         idempotency_key: Some(&key),
                         detail: &detail,
                         studio_name: None,
@@ -1284,7 +1291,7 @@ impl Credits {
             .rows_affected();
             if lifted == 1 {
                 let detail = json!({
-                    "source": by.source(),
+                    "source": by.actor().source(),
                     "transactionId": transaction_id,
                     "refundRef": undone_refund_ref,
                     "reversalRef": reversal_ref,
@@ -1294,7 +1301,7 @@ impl Credits {
                     &mut *tx,
                     super::store::AuditEntry {
                         action: "user.unblock",
-                        actor: by.actor(),
+                        actor: by.actor().name(),
                         target: Some(&address),
                         detail: &detail,
                     },
@@ -1386,7 +1393,10 @@ enum Undo {
     /// Paid but not credited yet: the credit that follows decides.
     Held,
     /// A refund of a purchase never credited: the row is held again.
-    Rehold,
+    Rehold {
+        address: Option<String>,
+        undone_refund_ref: Option<String>,
+    },
     /// A refund of a credited (or imported) purchase: granted back.
     Grant {
         address: String,
@@ -1408,7 +1418,10 @@ impl Undo {
         match status.as_str() {
             "held" => Self::Held,
             "refunded" if row.get::<bool, _>("upstream") => Self::NotRefunded,
-            "refunded" if !row.get::<bool, _>("credited") => Self::Rehold,
+            "refunded" if !row.get::<bool, _>("credited") => Self::Rehold {
+                address: row.get("address"),
+                undone_refund_ref: row.get("undone_refund_ref"),
+            },
             "refunded" | "imported" if refunded => match row.get::<Option<String>, _>("address") {
                 Some(address) => Self::Grant {
                     address,

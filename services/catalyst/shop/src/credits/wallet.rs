@@ -20,6 +20,28 @@ use super::money::CreditAmount;
 use super::store::{AuditEntry, Credits, SYSTEM_ACTOR};
 use crate::types::UsdCents;
 
+/// A `revoke` audit row's detail: `base` plus what was charged back,
+/// removed and left uncovered; `amount` is what was removed.
+pub(crate) fn revoke_detail(
+    base: &serde_json::Value,
+    tx_ref: &str,
+    charged_back: &str,
+    removed: &str,
+    shortfall: &str,
+    reason: &str,
+) -> serde_json::Value {
+    let mut detail = base.clone();
+    if let serde_json::Value::Object(map) = &mut detail {
+        map.insert("txRef".into(), json!(tx_ref));
+        map.insert("chargedBack".into(), json!(charged_back));
+        map.insert("removed".into(), json!(removed));
+        map.insert("shortfall".into(), json!(shortfall));
+        map.insert("reason".into(), json!(reason));
+        map.insert("amount".into(), json!(removed));
+    }
+    detail
+}
+
 #[derive(Debug, Clone)]
 pub struct GrantOutcome {
     pub available: String,
@@ -470,15 +492,9 @@ impl Credits {
         .await?;
 
         let Some(before) = before else {
-            let mut detail = detail.clone();
+            let mut detail = revoke_detail(detail, tx_ref, amount, "0", amount, reason);
             if let serde_json::Value::Object(map) = &mut detail {
-                map.insert("txRef".into(), json!(tx_ref));
-                map.insert("chargedBack".into(), json!(amount));
-                map.insert("removed".into(), json!("0"));
-                map.insert("shortfall".into(), json!(amount));
                 map.insert("walletRow".into(), json!("missing"));
-                map.insert("reason".into(), json!(reason));
-                map.insert("amount".into(), json!("0"));
             }
             Self::audit(
                 &mut **tx,
@@ -565,15 +581,9 @@ impl Credits {
         let has_shortfall: bool = row.get("has_shortfall");
         let uncovered_amount: String = row.get("uncovered_amount");
 
-        let mut detail = detail.clone();
+        let mut detail = revoke_detail(detail, tx_ref, amount, &removed, &shortfall, reason);
         if let serde_json::Value::Object(map) = &mut detail {
-            map.insert("txRef".into(), json!(tx_ref));
-            map.insert("chargedBack".into(), json!(amount));
             map.insert("blocked".into(), json!(blocked));
-            map.insert("removed".into(), json!(removed));
-            map.insert("shortfall".into(), json!(shortfall));
-            map.insert("reason".into(), json!(reason));
-            map.insert("amount".into(), json!(removed));
         }
         sqlx::query(LEDGER_SPLIT_INSERT_WITH_AUDIT)
             .bind(address)

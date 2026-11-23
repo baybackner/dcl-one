@@ -3217,10 +3217,24 @@ async fn an_operator_reversal_is_audited_as_the_operator() {
                 operator.clone(),
                 "operator".to_string()
             ),
-            ("user.unblock".to_string(), operator, "operator".to_string())
+            (
+                "user.unblock".to_string(),
+                operator.clone(),
+                "operator".to_string()
+            )
         ]
     );
     assert_eq!(unblock_audits(&pool, &w.address).await, 0);
+    // The grant's ledger row points at the operator's audit row.
+    let ledger_actors: Vec<String> = sqlx::query_scalar(
+        "SELECT a.actor FROM credits.ledger l JOIN ops.admin_audit a ON a.id = l.admin_audit_id \
+         WHERE l.address = $1 AND l.kind = 'refund' AND a.detail->>'reversalRef' = 'operator:v-1'",
+    )
+    .bind(&w.address)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ledger_actors, vec![operator]);
 }
 
 #[tokio::test]
@@ -3584,7 +3598,9 @@ async fn every_operator_app_store_action_it_applies_is_audited() {
         vec![audit("iap.hold", &operator, "operator")]
     );
 
-    // An operator refund that charges back nothing.
+    // An operator refund that charges back nothing. The endpoint charges back
+    // the whole purchase (`credits > 0` by the table), so only a partial
+    // percentage reaches this branch: the store is called directly.
     let bought = buy(&app, &c, &w, 1).await;
     let zero = signed_field(&bought[0], "transactionId");
     let outcome = state
