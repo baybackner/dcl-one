@@ -166,7 +166,7 @@ fn new_video_player_source(
             debug!("Reusing VideoTextureOutput.");
             texture.0.clone()
         }
-        (_, None) => images.add(video_output_image(basic::FUCHSIA)),
+        (_, None) => images.add(video_output_image(basic::BLACK)),
     };
     let sinks = match &(**source) {
         "" => noop_sinks::<VideoPlayer>((**source).to_owned(), Some(image.clone())),
