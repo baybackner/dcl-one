@@ -12,12 +12,15 @@
 //!
 //! Every bot this node runs holds a slot of `MAX_CONCURRENT_PRESENTATIONS`:
 //! a session, a creation in progress, or the JSON path's credential check
-//! and download. A room holds as many as there are slots, each with a bot
-//! token of its own: LiveKit gives a second bot of a token the place of the
-//! first, so a token that holds a slot answers 409 until its presentation
-//! stops. A creation runs in its own task, so a client that goes away
-//! mid-request leaves either a running session or nothing. Multipart uploads
-//! being read hold an upload permit, as many as there are slots.
+//! and download. A room runs one presentation: a new bot token of the room
+//! takes its slot, and the room's session stops at once, so it never counts
+//! against the limit (upstream keeps both). Two creations of one room in
+//! flight together both run; the one admitted last stops the other. LiveKit
+//! gives a second bot of a token the place of the first, so a token that
+//! holds a slot answers 409 until its presentation stops, and stops nothing.
+//! A creation runs in its own task, so a client that goes away mid-request
+//! leaves either a running session or nothing. Multipart uploads being read
+//! hold an upload permit, as many as there are slots.
 //!
 //! A bot that ends without leaving (its process killed) says nothing, and
 //! LiveKit keeps its participant and last slide for about 20 s: the node
@@ -290,12 +293,26 @@ pub struct Slot {
 
 impl Slot {
     /// The session takes the slot: in the map and out of `in_flight` at once.
-    fn admit(mut self, session: Arc<Session>) {
+    /// The room's other sessions, admitted while it was created, leave the
+    /// map with it; the caller stops them.
+    fn admit(mut self, session: Arc<Session>) -> Vec<Arc<Session>> {
         let mut sessions = self.presenter.sessions.lock().unwrap();
+        let replaced = take_room(&mut sessions, &self.seat.room);
         sessions.insert(session.id.clone(), session);
         self.presenter.in_flight.fetch_sub(1, Ordering::SeqCst);
         self.held = false;
+        replaced
     }
+}
+
+/// The sessions of `room`, out of the map.
+fn take_room(sessions: &mut HashMap<String, Arc<Session>>, room: &str) -> Vec<Arc<Session>> {
+    let ids: Vec<String> = sessions
+        .values()
+        .filter(|session| session.seat.room == room)
+        .map(|session| session.id.clone())
+        .collect();
+    ids.iter().filter_map(|id| sessions.remove(id)).collect()
 }
 
 impl Drop for Slot {
@@ -525,21 +542,41 @@ impl Presenter {
 
     /// The slot of the bot `token` names: 401 for a token that is no bot
     /// token, 429 when every slot is taken, 409 when that bot holds one.
+    /// The room's running session gives up its slot: it stops, whether or
+    /// not the new one starts.
     pub fn reserve(self: &Arc<Self>, token: &str) -> Result<Slot, CreateError> {
         let seat = self.verify_token(token)?;
-        let sessions = self.sessions.lock().unwrap();
-        if self.full(sessions.len()) {
-            return Err(self.capacity_error());
-        }
-        if !self.seats.lock().unwrap().insert(seat.identity.clone()) {
-            return Err(CreateError::TokenInUse);
-        }
-        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        let replaced = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let in_room = sessions
+                .values()
+                .filter(|session| session.seat.room == seat.room)
+                .count();
+            if self.full(sessions.len() - in_room) {
+                return Err(self.capacity_error());
+            }
+            if !self.seats.lock().unwrap().insert(seat.identity.clone()) {
+                return Err(CreateError::TokenInUse);
+            }
+            self.in_flight.fetch_add(1, Ordering::SeqCst);
+            take_room(&mut sessions, &seat.room)
+        };
+        self.retire(replaced);
         Ok(Slot {
             presenter: self.clone(),
             held: true,
             seat,
         })
+    }
+
+    /// Stops sessions already out of the map, each in its own task: a new
+    /// presentation of their room replaced them.
+    fn retire(self: &Arc<Self>, replaced: Vec<Arc<Session>>) {
+        for session in replaced {
+            tracing::info!(presentation = %session.id, room = %session.seat.room, "replaced by a new presentation of its room");
+            let presenter = self.clone();
+            crate::shared::task::spawn(async move { presenter.finish_stop(&session).await });
+        }
     }
 
     /// The JSON path's pre-flight, under the caller's slot: the token
@@ -625,7 +662,8 @@ impl Presenter {
             }
         };
         session.state.lock().await.presenter_identity = presenter_identity;
-        slot.admit(session.clone());
+        let replaced = slot.admit(session.clone());
+        self.retire(replaced);
         tracing::info!(presentation = %id, slides = session.slide_count, "presentation created");
         session.broadcast_state().await;
         crate::shared::task::spawn(self.clone().run(session.clone(), connected.data));
@@ -792,6 +830,12 @@ impl Presenter {
         let Some(session) = self.sessions.lock().unwrap().remove(id) else {
             return;
         };
+        self.finish_stop(&session).await;
+    }
+
+    /// [`Self::stop`] for a session already out of the map.
+    async fn finish_stop(&self, session: &Session) {
+        let id = &session.id;
         // Released on drop, so a cancelled stop never keeps the token.
         let _seat = SeatRelease {
             seats: &self.seats,
