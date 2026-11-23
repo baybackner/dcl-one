@@ -254,19 +254,19 @@
   }
 }
 
-.standalone .media {
+.pageMedia {
   min-height: 45svh;
 }
 
-.standalone .image {
+.pageImage {
   max-height: 85svh;
 }
 
-.standalone .details {
+.pageDetails {
   max-height: none;
 }
 
-.standalone .detailsScroll {
+.pageDetailsScroll {
   overflow: visible;
 }
 
@@ -325,8 +325,15 @@
   display: grid;
   gap: var(--dcl-space-4);
   max-width: calc(100% - 2 * var(--dcl-space-16));
+  overflow-wrap: anywhere;
+}
+
+.announcementVisible {
   padding: var(--dcl-space-8) var(--dcl-space-12);
   border-radius: var(--dcl-radius-md);
   background: var(--dcl-neutrals-pale-black);
-  overflow-wrap: anywhere;
+}
+
+.copyFallback {
+  user-select: all;
 }

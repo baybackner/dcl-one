@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { CatalystError } from "@/data/lib/catalyst/client";
 import type { ProfilePhoto } from "@/data/lib/catalyst/social/photos";
 
-import { loadReel, loadReelGallery } from "./loader.server";
+import { headers, meta } from "../routes/reels.$imageId";
+import { loadReel, loadReelGallery } from "./reels-loader.server";
 
 const ID = "00000000-0000-0000-0000-000000000001";
 const ADDRESS = "0x1111111111111111111111111111111111111111";
@@ -23,8 +24,12 @@ describe("Reels loader", () => {
     const response = await loadReel(ID, signal, read);
     expect(read).toHaveBeenCalledWith(ID, { signal });
     expect(response.data).toEqual(photo);
-    expect(new Headers(response.init?.headers).get("Cache-Control")).toBe("no-store");
-    expect(new Headers(response.init?.headers).get("X-Robots-Tag")).toBe("noindex");
+    const responseHeaders = headers({ loaderHeaders: new Headers(response.init?.headers) });
+    expect(Object.fromEntries(responseHeaders)).toEqual({ "cache-control": "no-store", "x-robots-tag": "noindex" });
+    expect(meta({ loaderData: photo, matches: [] })).toEqual([
+      { title: "Decentraland Reels" },
+      { name: "robots", content: "noindex" },
+    ]);
   });
 
   it("keeps missing and unavailable photos distinct", async () => {
@@ -41,19 +46,25 @@ describe("Reels loader", () => {
       received: 3,
       total: 3,
     });
-    expect(await loadReelGallery(ADDRESS, signal, read)).toEqual([publicPhoto]);
+    expect(await loadReelGallery(ADDRESS, signal, read)).toEqual({ photos: [publicPhoto], total: 3 });
     expect(read).toHaveBeenCalledWith(ADDRESS, { limit: 24 }, { signal });
   });
 
-  it("distinguishes an empty gallery from invalid upstream rows", async () => {
-    const read = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [], received: 0, total: 0 })
-      .mockResolvedValueOnce({ items: [], received: 1, total: 1 })
-      .mockRejectedValueOnce(new CatalystError("unknown wallet", "/user", 404));
-    expect(await loadReelGallery(ADDRESS, signal, read)).toEqual([]);
-    await expect(loadReelGallery(ADDRESS, signal, read)).rejects.toMatchObject({ status: 503 });
-    expect(await loadReelGallery(ADDRESS, signal, read)).toEqual([]);
+  describe("when Catalyst answers the gallery lookup", () => {
+    it("should return an empty gallery for a successful empty page", async () => {
+      const read = vi.fn().mockResolvedValue({ items: [], received: 0, total: 0 });
+      expect(await loadReelGallery(ADDRESS, signal, read)).toEqual({ photos: [], total: 0 });
+    });
+
+    it("should return 503 if every row is invalid", async () => {
+      const read = vi.fn().mockResolvedValue({ items: [], received: 1, total: 1 });
+      await expect(loadReelGallery(ADDRESS, signal, read)).rejects.toMatchObject({ status: 503 });
+    });
+
+    it("should return 503 when Catalyst reports a gallery read failure as 404", async () => {
+      const read = vi.fn().mockRejectedValue(new CatalystError("user not found", "/user", 404));
+      await expect(loadReelGallery(ADDRESS, signal, read)).rejects.toMatchObject({ status: 503 });
+    });
   });
 
   it("preserves an aborted request", async () => {

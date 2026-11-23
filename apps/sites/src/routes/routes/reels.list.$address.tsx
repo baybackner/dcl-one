@@ -1,12 +1,16 @@
 import { ReelsEmpty, ReelsGallery, ReelsPage } from "@dcl/one-ui/apps/sites/reels/ReelsPage";
 
-import { REELS_TITLE, ReelLink } from "@/features/reels/ReelScreen";
-import { loadReelGallery, reelHeaders } from "@/features/reels/loader.server";
-import { photoLabel, reelHref } from "@/features/reels/photo-view";
+import { CollectibleLink } from "@/features/profile/collectibles";
+
+import { REELS_TITLE, ReelErrorBoundary } from "../lib/reels-route";
+import { loadReelGallery, reelHeaders } from "../lib/reels-loader.server";
+import { photoLabel, reelHref } from "@/features/photos/photo-view";
 
 import type { Route } from "./+types/reels.list.$address";
 
-export { ReelErrorBoundary as ErrorBoundary } from "@/features/reels/ReelScreen";
+export function ErrorBoundary() {
+  return <ReelErrorBoundary missing="invalid-gallery" />;
+}
 
 export function loader({ params, request }: Route.LoaderArgs) {
   return loadReelGallery(params.address, request.signal);
@@ -21,8 +25,9 @@ export function meta() {
 }
 
 export default function ReelsList({ loaderData, params }: Route.ComponentProps) {
-  const name = loaderData[0]?.author.name || params.address;
-  const photos = loaderData.map((photo) => ({
+  const { photos: rows, total } = loaderData;
+  const name = rows[0]?.author.name || params.address;
+  const photos = rows.map((photo) => ({
     id: photo.id,
     href: reelHref(photo.id),
     label: photoLabel(photo),
@@ -31,7 +36,11 @@ export default function ReelsList({ loaderData, params }: Route.ComponentProps) 
   }));
   return (
     <ReelsPage title={`Reels by ${name}`} gallery>
-      {photos.length ? <ReelsGallery photos={photos} linkComponent={ReelLink} /> : <ReelsEmpty reason="gallery" />}
+      {photos.length ? (
+        <ReelsGallery photos={photos} total={total} linkComponent={CollectibleLink} />
+      ) : (
+        <ReelsEmpty reason="gallery" />
+      )}
     </ReelsPage>
   );
 }

@@ -1,6 +1,6 @@
 import { ReelsEmpty, ReelsPage } from "@dcl/one-ui/apps/sites/reels/ReelsPage";
 
-import { REELS_TITLE } from "@/features/reels/ReelScreen";
+import { REELS_TITLE } from "../lib/reels-route";
 
 export function meta() {
   return [{ title: REELS_TITLE }];

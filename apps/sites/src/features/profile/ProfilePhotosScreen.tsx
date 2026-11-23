@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useRouteLoaderData, useSearchParams } from "react-router";
 
 import { Button, JumpInCTA } from "@dcl/one-ui";
 import { GeneralGallery, GeneralImage, GeneralLock, GeneralPublic } from "@dcl/one-ui/foundations/icons";
@@ -23,8 +23,8 @@ import { isPhotoId, type ProfilePhoto } from "@/data/lib/catalyst/social/photos"
 import { normalizeAddress, type ProfileVM } from "@/data/lib/catalyst/social/profile";
 import { canReadProfile, photosQuery, signsFor } from "@/data/lib/profile/queries";
 
-import { downloadName, photoDetails, photoLabel } from "@/features/reels/photo-view";
-import { usePhotoActions } from "@/features/reels/usePhotoActions";
+import { downloadName, photoDetails, photoLabel } from "../photos/photo-view";
+import { usePhotoActions } from "../photos/usePhotoActions";
 
 import { CollectibleLink, catalogueTotal, loadedRows, loadMore } from "./collectibles";
 import { usePlaceOwners, useProfilePhoto, useProfilePhotos } from "./hooks";
@@ -71,7 +71,8 @@ function OpenPhoto({
   const photo = photos[index]!;
   const people = photo.people.flatMap((person) => (canReadProfile(person.address) ? [person.address] : []));
   const faces = usePlaceOwners(people);
-  const actions = usePhotoActions(photo, false);
+  const root = useRouteLoaderData("root") as { publicPageBase?: string } | undefined;
+  const actions = usePhotoActions(photo, false, root?.publicPageBase);
   const previous = photos[index - 1];
   const next = photos[index + 1];
   return (
@@ -81,7 +82,8 @@ function OpenPhoto({
       // Counted against the photos loaded, the ones Previous and Next can reach.
       label={`${photoLabel(photo)}, ${index + 1} of ${photos.length}`}
       details={photoDetails(photo, faces.data ?? {})}
-      actions={actions}
+      variant="dialog"
+      actions={photo.isPublic ? actions : undefined}
       download={{ href: photo.url, fileName: downloadName(photo, "image/jpeg") }}
       onPrevious={previous ? () => onOpen(previous.id) : undefined}
       onNext={next ? () => onOpen(next.id) : undefined}

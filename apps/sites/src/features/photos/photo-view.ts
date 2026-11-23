@@ -5,7 +5,7 @@ import { parsePosition } from "@/data/lib/catalyst/jump/jump";
 import { shortAddress } from "@/data/lib/catalyst/format/address";
 import { formatPhotoDate, parsePhotoDate, type ProfilePhoto } from "@/data/lib/catalyst/social/photos";
 import { canReadProfile } from "@/data/lib/profile/queries";
-import { profileHref } from "@/features/profile/tabs";
+import { profileHref } from "../profile/tabs";
 
 const WORLD_REALM = /^[a-z0-9-]+\.dcl\.eth$/;
 

@@ -1,12 +1,11 @@
 import { data } from "react-router";
 
-import { CatalystError } from "@/data/lib/catalyst/client";
 import { fetchPhoto, fetchUserPhotos, isPhotoId } from "@/data/lib/catalyst/social/photos";
 import { isEthAddress, normalizeAddress } from "@/data/lib/catalyst/social/profile";
 
 export const reelHeaders = { "Cache-Control": "no-store" };
 
-function missingPhoto(): Response {
+function notFound(): Response {
   return new Response(null, { status: 404, headers: reelHeaders });
 }
 
@@ -16,9 +15,9 @@ function unavailable(error: unknown, signal: AbortSignal): never {
 }
 
 export async function loadReel(id: string, signal: AbortSignal, read = fetchPhoto) {
-  if (!isPhotoId(id)) throw missingPhoto();
+  if (!isPhotoId(id)) throw notFound();
   const photo = await read(id.toLowerCase(), { signal }).catch((error: unknown) => unavailable(error, signal));
-  if (!photo || photo.id.toLowerCase() !== id.toLowerCase()) throw missingPhoto();
+  if (!photo || photo.id.toLowerCase() !== id.toLowerCase()) throw notFound();
   return data(photo, {
     headers: photo.isPublic ? reelHeaders : { ...reelHeaders, "X-Robots-Tag": "noindex" },
   });
@@ -26,13 +25,10 @@ export async function loadReel(id: string, signal: AbortSignal, read = fetchPhot
 
 export async function loadReelGallery(address: string, signal: AbortSignal, read = fetchUserPhotos) {
   const owner = normalizeAddress(address);
-  if (!isEthAddress(owner)) throw missingPhoto();
-  const page = await read(owner, { limit: 24 }, { signal }).catch((error: unknown) => {
-    if (!signal.aborted && error instanceof CatalystError && error.status === 404) return null;
-    return unavailable(error, signal);
-  });
-  if (!page) return [];
+  if (!isEthAddress(owner)) throw notFound();
+  // An unknown wallet returns an empty page. A 404 from this Catalyst read signals a failed lookup.
+  const page = await read(owner, { limit: 24 }, { signal }).catch((error: unknown) => unavailable(error, signal));
   const photos = page.items.filter((photo) => photo.isPublic && isPhotoId(photo.id));
   if (page.received > 0 && photos.length === 0) unavailable(new Error("Invalid public gallery"), signal);
-  return photos;
+  return { photos, total: page.total };
 }

@@ -4,8 +4,8 @@ import { itemIdFromUrn } from "@shop/detail/lib/urn";
 import { CHAIN } from "@shop/model/chain";
 
 import { assetPage } from "@/core/lib/shop/redirects";
-import { fetchCatalog, type CatalogItem } from "@/data/lib/catalyst/marketplace";
-import { loadWorldPlace, resolveLegacyPlace } from "@/data/lib/catalyst/places/destinations";
+import { fetchCatalog, type CatalogItem } from "../catalyst/marketplace";
+import { loadWorldPlace, resolveLegacyPlace } from "../catalyst/places/destinations";
 
 const STALE_MS = 60_000;
 const MAX_ITEMS = 100;
@@ -35,7 +35,7 @@ export function reelWearables(urns: readonly string[], items: Record<string, Ree
     const key = wearableRef(urn)?.key;
     const item = key ? items[key] : undefined;
     if (item) byId.set(item.id, item);
-    else if (urn.trim()) unresolved = true;
+    else if (key) unresolved = true;
   }
   if (unresolved) byId.set("unavailable", { id: "unavailable", label: "Some collectible details are unavailable." });
   return [...byId.values()];

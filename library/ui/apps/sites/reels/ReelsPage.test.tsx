@@ -17,6 +17,7 @@ describe('Reels', () => {
       render(
         <ReelsPage title="Photo at the Plaza">
           <PhotoViewer
+            variant="page"
             imageUrl="/photo.jpg"
             alt="Plaza"
             label="Photo at the Plaza"
@@ -41,7 +42,7 @@ describe('Reels', () => {
       expect(info).toHaveAttribute('aria-expanded', 'true')
       expect(screen.getByRole('link', { name: 'Plaza' })).toHaveAttribute('href', '/places/plaza')
       fireEvent.error(screen.getByRole('img', { name: 'Plaza' }))
-      expect(screen.getByRole('status')).toHaveTextContent('Photo could not be loaded.')
+      expect(screen.getByText('Photo could not be loaded.')).toBeInTheDocument()
     })
   })
 
@@ -49,6 +50,7 @@ describe('Reels', () => {
     it('should keep the gallery link and use the original image', () => {
       render(
         <ReelsGallery
+          total={25}
           photos={[
             {
               id: '1',
@@ -61,6 +63,7 @@ describe('Reels', () => {
           linkComponent={Link}
         />
       )
+      expect(screen.getByText('Showing 1 of 25 public photos')).toBeInTheDocument()
       const link = screen.getByRole('link', { name: 'Photo in a world' })
       const thumbnail = within(link).getByAltText('')
       expect(thumbnail).toHaveAttribute('src', '/thumb.jpg')

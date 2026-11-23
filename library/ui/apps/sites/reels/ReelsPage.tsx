@@ -30,21 +30,30 @@ export function ReelsPage({
 
 export function ReelsGallery({
   photos,
+  total,
   linkComponent: Link
 }: {
   photos: { id: string; href: string; label: string; thumbnail: string; image: string }[]
+  total: number
   linkComponent: ComponentType<PlaceCardLinkProps>
 }) {
   return (
-    <ul className={styles.grid}>
-      {photos.map((photo) => (
-        <li key={photo.id}>
-          <Link to={photo.href} className={styles.tile} aria-label={photo.label}>
-            <CardImage src={photo.thumbnail} fallbackSrc={photo.image} alt="" />
-          </Link>
-        </li>
-      ))}
-    </ul>
+    <>
+      {total > photos.length ? (
+        <p>
+          Showing {photos.length} of {total} public photos
+        </p>
+      ) : null}
+      <ul className={styles.grid}>
+        {photos.map((photo) => (
+          <li key={photo.id}>
+            <Link to={photo.href} className={styles.tile} aria-label={photo.label}>
+              <CardImage src={photo.thumbnail} fallbackSrc={photo.image} alt="" />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }
 
@@ -52,7 +61,7 @@ export function ReelsEmpty({
   reason,
   onRetry
 }: {
-  reason: 'photo' | 'gallery' | 'unavailable'
+  reason: 'photo' | 'gallery' | 'invalid-gallery' | 'unavailable'
   onRetry?: () => void
 }) {
   const copy = {
@@ -61,6 +70,10 @@ export function ReelsEmpty({
       'The photo you are trying to access does not exist or is no longer available.'
     ],
     gallery: ['No public photos', 'This gallery has no public photos yet.'],
+    'invalid-gallery': [
+      'Gallery not found',
+      'Check that the link contains a valid wallet address.'
+    ],
     unavailable: ['Reels is temporarily unavailable', 'Try loading this page again.']
   }[reason]
 

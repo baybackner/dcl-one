@@ -51,6 +51,7 @@ export type PhotoViewerActions = {
   downloading?: boolean
   announcement?: string
   copyFallbackHref?: string
+  announcementVersion?: number
 }
 
 export type PhotoViewerProps = {
@@ -68,13 +69,13 @@ export type PhotoViewerProps = {
   /** Without one, its button is marked unavailable and its arrow key does nothing. */
   onPrevious?: () => void
   onNext?: () => void
-  onClose?: () => void
   actions?: PhotoViewerActions
   linkComponent: ComponentType<PlaceCardLinkProps>
-}
+} & ({ variant: 'page'; onClose?: never } | { variant: 'dialog'; onClose: () => void })
 
 /** Profile photo and its information panel inside the shared gallery modal. */
 export function PhotoViewer({
+  variant,
   imageUrl,
   alt,
   label,
@@ -110,12 +111,8 @@ export function PhotoViewer({
   }
 
   const content = (
-    <div
-      className={[styles.body, detailsVisible && styles.withDetails, !onClose && styles.standalone]
-        .filter(Boolean)
-        .join(' ')}
-    >
-      <div className={styles.media}>
+    <div className={[styles.body, detailsVisible && styles.withDetails].filter(Boolean).join(' ')}>
+      <div className={variant === 'page' ? `${styles.media} ${styles.pageMedia}` : styles.media}>
         <div className={styles.toolbar}>
           {actions?.shareHref ? (
             <Button
@@ -177,13 +174,21 @@ export function PhotoViewer({
             <GeneralInfoButton size={22} aria-hidden="true" />
           </Button>
         </div>
-        {actions?.announcement || actions?.copyFallbackHref ? (
-          <div role="status" className={styles.announcement}>
-            {actions.announcement}
+        {actions ? (
+          <div
+            className={
+              actions.announcement
+                ? `${styles.announcement} ${styles.announcementVisible}`
+                : styles.announcement
+            }
+          >
+            <span role="status">
+              {actions.announcement ? (
+                <span key={actions.announcementVersion}>{actions.announcement}</span>
+              ) : null}
+            </span>
             {actions.copyFallbackHref ? (
-              <a className={styles.link} href={actions.copyFallbackHref}>
-                {actions.copyFallbackHref}
-              </a>
+              <code className={styles.copyFallback}>{actions.copyFallbackHref}</code>
             ) : null}
           </div>
         ) : null}
@@ -193,7 +198,13 @@ export function PhotoViewer({
             Photo could not be loaded.
           </div>
         ) : (
-          <img ref={ref} onError={onError} className={styles.image} src={imageUrl} alt={alt} />
+          <img
+            ref={ref}
+            onError={onError}
+            className={variant === 'page' ? `${styles.image} ${styles.pageImage}` : styles.image}
+            src={imageUrl}
+            alt={alt}
+          />
         )}
         {onPrevious || onNext ? (
           <>
@@ -215,10 +226,24 @@ export function PhotoViewer({
       <div
         id={detailsId}
         hidden={!detailsVisible}
-        className={detailsVisible ? styles.details : undefined}
+        className={
+          detailsVisible
+            ? variant === 'page'
+              ? `${styles.details} ${styles.pageDetails}`
+              : styles.details
+            : undefined
+        }
       >
         {detailsVisible ? (
-          <section className={styles.detailsScroll} aria-labelledby={titleId} tabIndex={0}>
+          <section
+            className={
+              variant === 'page'
+                ? `${styles.detailsScroll} ${styles.pageDetailsScroll}`
+                : styles.detailsScroll
+            }
+            aria-labelledby={titleId}
+            tabIndex={0}
+          >
             <div className={styles.header}>
               <h2 id={titleId} className={styles.sectionTitle}>
                 information
@@ -312,7 +337,7 @@ export function PhotoViewer({
     </div>
   )
 
-  if (!onClose) return content
+  if (variant === 'page') return content
   return (
     <Modal
       layout="gallery"
@@ -325,7 +350,7 @@ export function PhotoViewer({
         // Clicking blank gallery space keeps the current keyboard control focused.
         const control =
           event.target instanceof Element
-            ? event.target.closest('button, a[href], [tabindex]')
+            ? event.target.closest('button, a[href], [tabindex], code')
             : null
         if (!event.currentTarget.contains(control)) event.preventDefault()
       }}

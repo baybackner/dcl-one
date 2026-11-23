@@ -2,7 +2,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { input } from "zod";
 
-import type { CatalogItemSchema } from "@/data/lib/catalyst/generated-schemas/market";
+import type { CatalogItemSchema } from "../catalyst/generated-schemas/market";
 
 import { reelWearables, reelWearablesQuery, wearableRef } from "./queries";
 
@@ -87,9 +87,10 @@ describe("Reels wearable lookups", () => {
   });
 
   describe("when no item can be looked up", () => {
-    it("should avoid unsupported reads and show a fallback", () => {
+    it("should ignore unsupported entries and report missing catalog items", () => {
       expect(reelWearablesQuery(["broken"]).enabled).toBe(false);
-      expect(reelWearables(["broken", ""], {})).toEqual([UNRESOLVED]);
+      expect(reelWearables(["broken", "", "urn:decentraland:off-chain:base-avatars:tshirt"], {})).toEqual([]);
+      expect(reelWearables([ASSET], {})).toEqual([UNRESOLVED]);
     });
   });
 });
