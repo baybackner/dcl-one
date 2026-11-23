@@ -2,12 +2,13 @@
 //! (`RendererSceneContext::logs`) and, on request, the client's warnings and errors from the ring
 //! here, fed by [`LogRingLayer`]. Every line of either kind takes its `seq` from one process
 //! counter ([`next_seq`]), so a reader passes the `latestSeq` of its last read as `since` and gets
-//! only newer lines, across a scene reload too. `dropped` counts the lines after its cursor that
-//! a ring evicted before it read them.
+//! only newer lines; a reloaded scene's lines take later seqs. `dropped` counts the lines after
+//! its cursor that a ring evicted before it read them, and the client lines the layer could not
+//! record ([`LogRingLayer`]).
 
 use std::{
     collections::VecDeque,
-    fmt::{Debug, Write},
+    fmt::Write,
     sync::{
         atomic::{AtomicU64, Ordering},
         LazyLock, Mutex,
@@ -15,12 +16,10 @@ use std::{
 };
 
 use bevy::log::{
-    tracing::{
-        field::{Field, Visit},
-        Event, Level, Subscriber,
-    },
+    tracing::{Event, Level, Subscriber},
     tracing_subscriber::{layer::Context, Layer},
 };
+use perf_output::{layer::Fields, scrub};
 
 /// Client lines the ring keeps.
 const CAPACITY: usize = 1000;
@@ -28,11 +27,14 @@ const CAPACITY: usize = 1000;
 /// Bytes of a client line the ring keeps; the rest is cut.
 const MAX_LINE_BYTES: usize = 4096;
 
-/// The target a scene's own lines are echoed to stdout under; the layer leaves them out, since
-/// the scene's ring holds them.
-const SCENE_ECHO_TARGET: &str = "scene_runner::renderer_context";
+/// The target a scene's own lines are echoed to stdout under (`RendererSceneContext::log` names
+/// it on each echo); the layer leaves them out, since the scene's ring holds them.
+pub const SCENE_ECHO_TARGET: &str = "scene_runner::renderer_context";
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Client lines the layer could not record because the ring was being read or written.
+static SKIPPED: AtomicU64 = AtomicU64::new(0);
 
 static CLIENT: LazyLock<Mutex<ClientRing>> = LazyLock::new(Mutex::default);
 
@@ -127,8 +129,9 @@ pub struct LogQuery {
 pub struct LogPage {
     /// the newest seq given out, to any source; 0 before the first line
     pub latest_seq: u64,
-    /// lines after `since` that the rings read evicted. Exact without `since`; with it, the most
-    /// it can be: a ring counts its evictions, not which of them came after a seq.
+    /// lines after `since` that the rings read evicted, and client lines the layer could not
+    /// record. Exact without `since`; with it, the most it can be: a ring counts its evictions,
+    /// not which of them came after a seq.
     pub dropped: u64,
     /// lines the query selected that `count` left out (the oldest)
     pub omitted: usize,
@@ -142,16 +145,48 @@ struct ClientRing {
     evicted: u64,
 }
 
+/// What a read takes from the client ring while it holds the lock.
+#[derive(Default)]
+struct ClientRead {
+    evicted: u64,
+    /// the seq of the oldest line the ring holds
+    oldest: Option<u64>,
+    /// lines the layer could not record
+    skipped: u64,
+    /// the lines after the query's `since` of at least its severity, oldest first
+    lines: Vec<LogLine>,
+}
+
+/// Cuts `text` to [`MAX_LINE_BYTES`] on a character boundary; whether it cut anything.
+fn cut(text: &mut String) -> bool {
+    if text.len() <= MAX_LINE_BYTES {
+        return false;
+    }
+    let mut end = MAX_LINE_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    true
+}
+
+/// A client line's text as the ring keeps it: cut to [`MAX_LINE_BYTES`], then with every
+/// credential replaced. The cut comes first, so the scrub never reads more than that of a text
+/// a scene may have chosen (a failed asset's `src`); a text that was cut ends in `…`.
+fn client_text(mut text: String) -> String {
+    let mut was_cut = cut(&mut text);
+    let mut text = scrub::credentials(&text).into_owned();
+    // a replacement can be longer than what it replaces
+    was_cut |= cut(&mut text);
+    if was_cut {
+        text.push('…');
+    }
+    text
+}
+
 impl ClientRing {
-    fn push(&mut self, severity: Severity, target: String, mut text: String) {
-        if text.len() > MAX_LINE_BYTES {
-            let mut end = MAX_LINE_BYTES;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            text.push('…');
-        }
+    /// Adds a line; `text` is already [`client_text`].
+    fn push(&mut self, severity: Severity, target: String, text: String) {
         if self.lines.len() == CAPACITY {
             self.lines.pop_front();
             self.evicted += 1;
@@ -166,17 +201,39 @@ impl ClientRing {
             text,
         });
     }
+
+    /// What `query` reads of the ring. The ring is in seq order, so the lines after `since` are
+    /// its tail, and only those are copied.
+    fn read(&self, query: &LogQuery) -> ClientRead {
+        let since = query.since.unwrap_or(0);
+        let start = self.lines.partition_point(|line| line.seq <= since);
+        ClientRead {
+            evicted: self.evicted,
+            oldest: self.lines.front().map(|line| line.seq),
+            skipped: 0,
+            lines: self
+                .lines
+                .range(start..)
+                .filter(|line| line.severity >= query.min)
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 /// The most lines after `since` a ring can have evicted: no more than it evicted in all, and no
 /// more than the seqs between `since` and the oldest line it still holds.
 fn dropped_after(since: u64, evicted: u64, oldest: Option<u64>, latest: u64) -> u64 {
-    evicted.min(oldest.unwrap_or(latest + 1).saturating_sub(since + 1))
+    evicted.min(
+        oldest
+            .unwrap_or(latest + 1)
+            .saturating_sub(since.saturating_add(1)),
+    )
 }
 
 fn page(
     scene: SceneLines,
-    client: Option<&ClientRing>,
+    client: Option<ClientRead>,
     latest_seq: u64,
     query: &LogQuery,
 ) -> LogPage {
@@ -189,13 +246,10 @@ fn page(
     );
     let mut lines = scene.lines;
     if let Some(client) = client {
-        dropped += dropped_after(
-            since,
-            client.evicted,
-            client.lines.front().map(|line| line.seq),
-            latest_seq,
-        );
-        lines.extend(client.lines.iter().cloned());
+        dropped += dropped_after(since, client.evicted, client.oldest, latest_seq);
+        // a skipped line took a seq, so no more of them came after `since` than seqs did
+        dropped += client.skipped.min(latest_seq.saturating_sub(since));
+        lines.extend(client.lines);
         lines.sort_by_key(|line| line.seq);
     }
     lines.retain(|line| line.seq > since && line.severity >= query.min);
@@ -212,12 +266,22 @@ fn page(
 
 /// Reads a scene's lines and, with `query.client`, the client's.
 pub fn read(scene: SceneLines, query: &LogQuery) -> LogPage {
-    let client = CLIENT
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // read under the lock: no client line can take a seq past it meanwhile
-    let latest_seq = SEQ.load(Ordering::Relaxed);
-    page(scene, query.client.then_some(&*client), latest_seq, query)
+    // the lock is held for the copy of the lines the query selects alone: the merge and the sort
+    // run after it, so a thread that logs meanwhile waits (or, on the web, skips) as briefly as
+    // can be
+    let (client, latest_seq) = {
+        let ring = CLIENT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // read under the lock: no line the ring records can take a seq past it meanwhile
+        let latest_seq = SEQ.load(Ordering::Relaxed);
+        let client = query.client.then(|| ClientRead {
+            skipped: SKIPPED.load(Ordering::Relaxed),
+            ..ring.read(query)
+        });
+        (client, latest_seq)
+    };
+    page(scene, client, latest_seq, query)
 }
 
 impl LogPage {
@@ -267,7 +331,38 @@ impl LogPage {
 }
 
 /// The tracing layer that records the client's warnings and errors in the client ring.
+///
+/// It never waits on the web. There every thread logs through this layer, the page's thread
+/// among them, and the page's thread cannot block: a wait on a held lock traps it. So a line that
+/// arrives while the ring is held is not recorded; it takes a seq and is counted, and a read
+/// reports it in `dropped`. A native thread waits instead: the ring is held only to push a line
+/// or to copy the lines of a read.
 pub struct LogRingLayer;
+
+/// The client ring to record a line in, or `None` where this thread may not wait for it.
+fn ring_to_write() -> Option<std::sync::MutexGuard<'static, ClientRing>> {
+    use std::sync::TryLockError;
+    if cfg!(target_arch = "wasm32") {
+        match CLIENT.try_lock() {
+            Ok(ring) => Some(ring),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    } else {
+        Some(
+            CLIENT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+}
+
+/// Counts a line the layer could not record. It takes a seq all the same, so a read's cursor
+/// bounds how many of these came after it.
+fn skip() {
+    next_seq();
+    SKIPPED.fetch_add(1, Ordering::Relaxed);
+}
 
 impl<S: Subscriber> Layer<S> for LogRingLayer {
     fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
@@ -276,47 +371,13 @@ impl<S: Subscriber> Layer<S> for LogRingLayer {
         if *metadata.level() > Level::WARN || metadata.target() == SCENE_ECHO_TARGET {
             return;
         }
-        let mut message = Message::default();
-        event.record(&mut message);
-        let target = message
-            .log_target
-            .take()
-            .unwrap_or_else(|| metadata.target().to_owned());
-        let text = format!("{}{}", message.text, message.others);
-        let text = perf_output::scrub::credentials(&text).into_owned();
-        if let Ok(mut ring) = CLIENT.lock() {
-            ring.push(Severity::of(metadata.level()), target, text);
-        }
-    }
-}
-
-/// An event's message and its other fields as ` name=value`, and the `log` bridge's target.
-#[derive(Default)]
-struct Message {
-    text: String,
-    others: String,
-    log_target: Option<String>,
-}
-
-impl Visit for Message {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        match field.name() {
-            "message" => self.text.push_str(value),
-            "log.target" => self.log_target = Some(value.to_owned()),
-            name if name.starts_with("log.") => {}
-            _ => self.record_debug(field, &value),
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
-        match field.name() {
-            "message" => {
-                let _ = write!(self.text, "{value:?}");
-            }
-            name if name.starts_with("log.") => {}
-            name => {
-                let _ = write!(self.others, " {name}={value:?}");
-            }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let target = fields.log_target().unwrap_or(metadata.target()).to_owned();
+        let text = client_text(fields.message());
+        match ring_to_write() {
+            Some(mut ring) => ring.push(Severity::of(metadata.level()), target, text),
+            None => skip(),
         }
     }
 }
@@ -382,13 +443,14 @@ mod tests {
             client: true,
             ..query()
         };
-        assert_eq!(seqs(&page(scene(), Some(&client()), 4, &both)), [1, 2, 3]);
+        let client = client().read(&both);
+        assert_eq!(seqs(&page(scene(), Some(client), 4, &both)), [1, 2, 3]);
     }
 
     #[test]
     fn since_severity_and_count_narrow_a_read() {
         let client = client();
-        let read = |query: LogQuery| page(scene(), Some(&client), 4, &query);
+        let read = |query: LogQuery| page(scene(), Some(client.read(&query)), 4, &query);
         let after = read(LogQuery {
             since: Some(1),
             ..query()
@@ -427,17 +489,83 @@ mod tests {
         assert_eq!(dropped(Some(10)), 0);
         // a ring that evicted nothing dropped nothing, whatever the cursor
         assert_eq!(page(scene(), None, 4, &query()).dropped, 0);
+        // the last seq there is has nothing after it
+        assert_eq!(dropped(Some(u64::MAX)), 0);
     }
 
     #[test]
-    fn the_client_ring_counts_evictions_and_cuts_a_long_line() {
+    fn dropped_counts_the_client_lines_the_layer_skipped() {
+        let dropped = |since, skipped| {
+            let query = LogQuery {
+                client: true,
+                since,
+                ..query()
+            };
+            let client = ClientRead {
+                skipped,
+                ..client().read(&query)
+            };
+            page(scene(), Some(client), 10, &query).dropped
+        };
+        assert_eq!(dropped(None, 3), 3);
+        // only seqs 9 and 10 came after 8, so no more than two skipped lines did
+        assert_eq!(dropped(Some(8), 3), 2);
+        assert_eq!(dropped(Some(10), 3), 0);
+        assert_eq!(dropped(None, 0), 0);
+    }
+
+    #[test]
+    fn a_skipped_line_takes_a_seq_and_is_counted() {
+        let (seq, skipped) = (SEQ.load(Ordering::Relaxed), SKIPPED.load(Ordering::Relaxed));
+        skip();
+        // other tests give out seqs meanwhile, so each is at least one further
+        assert!(SEQ.load(Ordering::Relaxed) > seq);
+        assert!(SKIPPED.load(Ordering::Relaxed) > skipped);
+    }
+
+    #[test]
+    fn a_read_copies_only_the_client_lines_after_the_cursor() {
+        let mut ring = client();
+        ring.lines.push_back(LogLine {
+            seq: 5,
+            severity: Severity::Error,
+            source: Source::Client("comms".to_owned()),
+            time: None,
+            label: "",
+            text: "e".to_owned(),
+        });
+        let read = |since, min| {
+            let read = ring.read(&LogQuery {
+                since,
+                min,
+                ..query()
+            });
+            assert_eq!(read.oldest, Some(2));
+            read.lines.iter().map(|line| line.seq).collect::<Vec<_>>()
+        };
+        assert_eq!(read(None, Severity::Trace), [2, 5]);
+        assert_eq!(read(Some(2), Severity::Trace), [5]);
+        assert_eq!(read(None, Severity::Error), [5]);
+        assert_eq!(read(Some(5), Severity::Trace), Vec::<u64>::new());
+    }
+
+    #[test]
+    fn a_long_text_is_cut_before_its_credentials_are_replaced() {
+        // far past the cut: the scrub must not read it
+        let long = client_text("signature ".repeat(100_000));
+        assert!(long.len() <= MAX_LINE_BYTES + '…'.len_utf8() && long.ends_with('…'));
+        let multibyte = client_text("é".repeat(MAX_LINE_BYTES));
+        assert!(multibyte.len() <= MAX_LINE_BYTES + '…'.len_utf8() && multibyte.ends_with('…'));
+        assert_eq!(client_text("short".to_owned()), "short");
+    }
+
+    #[test]
+    fn the_client_ring_counts_evictions_and_stays_in_seq_order() {
         let mut ring = ClientRing::default();
         for _ in 0..CAPACITY + 2 {
-            ring.push(Severity::Warn, "t".to_owned(), "é".repeat(MAX_LINE_BYTES));
+            ring.push(Severity::Warn, "t".to_owned(), "w".to_owned());
         }
         assert_eq!((ring.lines.len(), ring.evicted), (CAPACITY, 2));
-        let text = &ring.lines[0].text;
-        assert!(text.len() <= MAX_LINE_BYTES + '…'.len_utf8() && text.ends_with('…'));
         let seqs: Vec<u64> = ring.lines.iter().map(|line| line.seq).collect();
         assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]));
     }
@@ -449,7 +577,7 @@ mod tests {
             ..query()
         };
         assert_eq!(
-            page(scene(), Some(&client()), 4, &both).render(false),
+            page(scene(), Some(client().read(&both)), 4, &both).render(false),
             "latestSeq=4 dropped=0 source=scene+client\n1 [scene] info a\n2 [client:comms] warn \
              w\n3 [scene] error b\n    c"
         );

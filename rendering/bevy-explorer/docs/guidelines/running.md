@@ -358,12 +358,17 @@ State, in every build:
   client, takes its `seq` from one counter. The first line is a header `latestSeq=N dropped=N
   source=scene` (`scene+client` with `--client`, ` omitted=N` when `count` left older lines out):
   `latestSeq` is the newest seq given out, to pass as the next read's `--since` (only lines after
-  it; it holds across a `/reload`), and `dropped` counts the lines after the cursor that were
-  evicted before this read (exact without `--since`; with it, the most it can be). `count` keeps
-  the newest lines (20, or all with `--since`). `--severity` is the least severity shown; a
-  scene's `console.log` is `info`, its errors are `error`. `--client` adds the engine's own
-  warnings and errors from a ring of the last 1000 (never its info lines; a credential in one is
-  replaced, and a line is cut at 4096 bytes). Without `--since`, `--severity` or `--client` a line
+  it), and `dropped` counts the lines after the cursor that were evicted before this read (exact
+  without `--since`; with it, the most it can be). A `/reload` starts the scene's ring again: the
+  new scene's lines take later seqs, so the cursor still selects only them, but the lines the old
+  scene wrote after the cursor are gone and `dropped` does not count them. `count` keeps the
+  newest lines (20, or all with `--since`). `--severity` is the least severity shown; a scene's
+  `console.log` is `info`, and both what a scene writes with `console.error` or throws
+  (`SceneError`) and what the engine reports about it (`SystemError`) are `error`, so `--severity
+  error` reads every failure of the scene; the plain form's level tells the two apart. `--client`
+  adds the engine's own warnings and errors from a ring of the last 1000 (never its info lines; a
+  line is cut at 4096 bytes and a credential in it is replaced). On the web a client line logged
+  while the ring is being read or written is not kept, and `dropped` counts it. Without `--since`, `--severity` or `--client` a line
   reads `<seq> [<scene time>] <Level>: <text>` (`Log`, `SceneError`, `SystemError`); with any of
   them `<seq> [scene] <severity> <text>` or `<seq> [client:<target>] <severity> <text>`. A text's
   further lines are indented four spaces.

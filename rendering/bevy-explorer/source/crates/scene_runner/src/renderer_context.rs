@@ -453,13 +453,31 @@ impl RendererSceneContext {
             };
             match log.level {
                 dcl_types::SceneLogLevel::Log => {
-                    info!("[{} {:.2}] {}", base, log.timestamp, log.message)
+                    info!(
+                        target: log_ring::SCENE_ECHO_TARGET,
+                        "[{} {:.2}] {}",
+                        base,
+                        log.timestamp,
+                        log.message
+                    )
                 }
                 dcl_types::SceneLogLevel::SceneError => {
-                    warn!("[{} {:.2}] {}", base, log.timestamp, log.message)
+                    warn!(
+                        target: log_ring::SCENE_ECHO_TARGET,
+                        "[{} {:.2}] {}",
+                        base,
+                        log.timestamp,
+                        log.message
+                    )
                 }
                 dcl_types::SceneLogLevel::SystemError => {
-                    error!("[{} {:.2}] {}", base, log.timestamp, log.message)
+                    error!(
+                        target: log_ring::SCENE_ECHO_TARGET,
+                        "[{} {:.2}] {}",
+                        base,
+                        log.timestamp,
+                        log.message
+                    )
                 }
             }
         }
