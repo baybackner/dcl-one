@@ -11,7 +11,7 @@ pub mod bubble;
 mod diagnostics;
 pub mod layout;
 mod material;
-pub mod plate;
+mod plate;
 mod text;
 
 use alloy_core::primitives::Address;
@@ -680,13 +680,17 @@ fn spawn_tag(
     });
 }
 
-fn despawn_tags_of(owner: Entity, commands: &mut Commands, children: &Query<&Children>) {
-    for child in children.iter_descendants(owner) {
-        commands.queue(move |world: &mut World| {
-            if world.get::<Nametag>(child).is_some() {
-                world.despawn(child);
-            }
-        });
+/// The tag is its owner's own child.
+fn despawn_tags_of(
+    owner: Entity,
+    commands: &mut Commands,
+    children: &Query<&Children>,
+    tags: &Query<(), With<Nametag>>,
+) {
+    for child in children.get(owner).into_iter().flatten() {
+        if tags.contains(*child) {
+            commands.entity(*child).try_despawn();
+        }
     }
 }
 
@@ -695,10 +699,11 @@ fn despawn_unnamed_tag(
     mut commands: Commands,
     children: Query<&Children>,
     plated: Query<(), With<NametagPlate>>,
+    tags: Query<(), With<Nametag>>,
 ) {
     let owner = trigger.target();
     if !plated.contains(owner) {
-        despawn_tags_of(owner, &mut commands, &children);
+        despawn_tags_of(owner, &mut commands, &children, &tags);
     }
     commands.entity(owner).try_remove::<ChatBubble>();
 }
@@ -708,10 +713,11 @@ fn despawn_unplated_tag(
     mut commands: Commands,
     children: Query<&Children>,
     named: Query<(), With<NametagContent>>,
+    tags: Query<(), With<Nametag>>,
 ) {
     let owner = trigger.target();
     if !named.contains(owner) {
-        despawn_tags_of(owner, &mut commands, &children);
+        despawn_tags_of(owner, &mut commands, &children, &tags);
     }
 }
 
@@ -1148,7 +1154,11 @@ impl TagBuilder<'_, '_> {
                 drawn = plate_quads(
                     &layout::plate(
                         label.map_or(Vec2::ZERO, |label| label.size),
-                        name.as_ref().map(|name| name.root),
+                        // clear of the mention ring while it shows
+                        name.as_ref().map(|name| {
+                            name.root
+                                .inflate(MENTION_RING * progress.mention.clamp(0.0, 1.0))
+                        }),
                     ),
                     plate,
                     label,
