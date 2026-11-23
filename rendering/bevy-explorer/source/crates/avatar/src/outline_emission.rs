@@ -72,7 +72,7 @@ fn outlined_particle_keeps_its_glow() {
     );
 
     // the glTF's particle material, derived as derived_scene_material does
-    let factor = [0.11824828f32, 0.76031017, 1.0];
+    let factor = [0.11824828f32, 0.760_310_2, 1.0];
     let base = Color::linear_rgba(0.11696858, 0.76052517, 1.0, 1.0);
     let emissive = LinearRgba::rgb(
         crate::avatar_emission(factor[0]),
