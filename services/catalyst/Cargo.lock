@@ -1868,6 +1868,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "catalyst-comms-e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "catalyst-comms",
+ "catalyst-content",
+ "chrono",
+ "clap",
+ "dcl-auth",
+ "dcl-livekit-token",
+ "futures",
+ "hex",
+ "k256",
+ "parking_lot",
+ "prost",
+ "rand_chacha 0.3.1",
+ "rcgen",
+ "reqwest 0.13.5",
+ "rustls",
+ "rusty_enet",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "toml",
+ "url",
+ "web-transport-quinn",
+]
+
+[[package]]
 name = "catalyst-config"
 version = "0.1.0"
 dependencies = [
@@ -1914,6 +1949,7 @@ dependencies = [
  "ipnet",
  "libc",
  "metrics",
+ "metrics-exporter-prometheus",
  "parking_lot",
  "rand 0.10.3",
  "regex",
@@ -2571,7 +2607,7 @@ checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
