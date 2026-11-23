@@ -6,7 +6,7 @@ use std::{collections::VecDeque, f32::consts::PI, time::Duration};
 
 use bevy::{
     animation::{AnimationTarget, AnimationTargetId},
-    asset::RenderAssetUsages,
+    asset::{RecursiveDependencyLoadState, RenderAssetUsages},
     gltf::Gltf,
     platform::collections::{HashMap, HashSet},
     prelude::*,
@@ -661,9 +661,57 @@ fn select_avatar(
 #[derive(Component)]
 pub struct AvatarDefinition {
     render: AvatarRenderDefinition,
+    /// the body or the wearables that failed to load, so `render` is without them
+    failed: Option<String>,
     /// played once the avatar is processed. a change of emote alone is applied to the avatar
     /// as it stands, without a rebuild
     emote: Option<EmoteCommand>,
+}
+
+/// How far the files an avatar draws from have loaded. The state of many files is the greatest
+/// of their states.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AvatarFiles {
+    Loaded,
+    Loading,
+    /// Says what failed to load.
+    Failed(String),
+}
+
+impl AvatarDefinition {
+    /// The state of the body's and every worn wearable's model, texture and mask, each with
+    /// the files it loads in turn. Failed too when the body or a wearable failed to load, in
+    /// this build or an earlier one. The avatar itself is built without what failed
+    /// ([`AvatarLoadFailures`]), so a capture reads this beside [`AvatarProcessed`].
+    pub fn files(&self, asset_server: &AssetServer) -> AvatarFiles {
+        if let Some(failed) = &self.failed {
+            return AvatarFiles::Failed(format!("{failed} failed to load"));
+        }
+        let worn = std::iter::once(&self.render.body)
+            .chain(self.render.wearables.iter().map(|(_, wearable)| wearable));
+        worn.flat_map(|wearable| {
+            let model = wearable
+                .model
+                .as_ref()
+                .map(|model| model.gltf.id().untyped());
+            let images = [&wearable.texture, &wearable.mask]
+                .into_iter()
+                .flatten()
+                .map(|image| image.id().untyped());
+            model.into_iter().chain(images)
+        })
+        .map(
+            |id| match asset_server.recursive_dependency_load_state(id) {
+                RecursiveDependencyLoadState::Loaded => AvatarFiles::Loaded,
+                RecursiveDependencyLoadState::Failed(error) => {
+                    AvatarFiles::Failed(error.to_string())
+                }
+                _ => AvatarFiles::Loading,
+            },
+        )
+        .max()
+        .unwrap_or(AvatarFiles::Loaded)
+    }
 }
 
 /// everything the built avatar is made from: a change here means a rebuild
@@ -749,6 +797,14 @@ impl AvatarLoadFailures {
 
     fn wearable_failed(failures: Option<&Self>, urn: &WearableUrn) -> bool {
         failures.is_some_and(|failures| failures.wearables.contains(urn))
+    }
+
+    /// The failed files in order, for a message.
+    fn names(&self) -> Option<String> {
+        let mut names: Vec<_> = self.bodies.iter().chain(&self.wearables).collect();
+        names.sort_unstable_by_key(|urn| urn.as_str());
+        let names: Vec<_> = names.into_iter().map(ToString::to_string).collect();
+        (!names.is_empty()).then(|| names.join(", "))
     }
 }
 
@@ -931,6 +987,7 @@ fn update_render_avatar(
 
         // get wearables
         let mut all_loaded = true;
+        let mut failed_wearable = None;
         let specified_wearables: Vec<_> = selection
             .shape
             .0
@@ -949,6 +1006,10 @@ fn update_render_avatar(
                     }
                     Err(other) => {
                         debug!("skipping failed wearable {wearable:?}: {other:?}");
+                        // absent or unfit for the body is the server's answer, not a failure
+                        if matches!(other, CollectibleError::Failed) {
+                            failed_wearable = Some(wearable.to_string());
+                        }
                         None
                     }
                 }
@@ -1060,6 +1121,10 @@ fn update_render_avatar(
 
         debug!("avatar definition loaded: {wearables:?}");
         let definition = AvatarDefinition {
+            // the files that earlier builds failed with, else the wearable that failed now
+            failed: maybe_failures
+                .and_then(AvatarLoadFailures::names)
+                .or(failed_wearable),
             render: AvatarRenderDefinition {
                 body,
                 body_shape: body_urn.as_str().to_owned(),

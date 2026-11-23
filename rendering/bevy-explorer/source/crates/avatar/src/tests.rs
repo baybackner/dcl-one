@@ -772,6 +772,17 @@ fn exercise_gltf_fallback(
             .body_shape,
         default_body.as_str()
     );
+    // the fallback build is not the avatar that the shape names: a capture reads it as failed
+    let asset_server = app.world().resource::<AssetServer>().clone();
+    let fallback_files = app
+        .world()
+        .get::<AvatarDefinition>(fallback_build)
+        .unwrap()
+        .files(&asset_server);
+    assert!(
+        matches!(&fallback_files, AvatarFiles::Failed(what) if what.contains(requested.as_str())),
+        "{failure:?}: {fallback_files:?}"
+    );
     app.world_mut().run_system_once(spawn_scenes).unwrap();
     reports.extend(take_load_reports(app.world(), &mut cursor));
     assert!(
@@ -1001,4 +1012,49 @@ fn a_wearable_opts_out_of_the_hover_glow() {
             0
         );
     }
+}
+
+/// A definition of a body alone, with no file to draw from.
+fn bare_definition(failed: Option<String>) -> AvatarDefinition {
+    let mut render = render_definition(false, false);
+    render.body.model = None;
+    AvatarDefinition {
+        failed,
+        render,
+        emote: None,
+    }
+}
+
+#[test]
+fn an_avatars_files_have_failed_when_one_has_and_load_while_one_loads() {
+    assert!(AvatarFiles::Loaded < AvatarFiles::Loading);
+    assert!(AvatarFiles::Loading < AvatarFiles::Failed(String::new()));
+}
+
+#[test]
+fn an_avatars_files_have_failed_when_a_wearable_or_a_file_failed_to_load() {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        .init_asset::<Image>();
+    let asset_server = app.world().resource::<AssetServer>().clone();
+    let mut whole = bare_definition(None);
+    assert_eq!(whole.files(&asset_server), AvatarFiles::Loaded);
+    assert_eq!(
+        bare_definition(Some("hat".to_owned())).files(&asset_server),
+        AvatarFiles::Failed("hat failed to load".to_owned())
+    );
+
+    // the body draws from a texture in a file that cannot load
+    whole.render.body.texture = Some(asset_server.load("missing.png"));
+    assert_eq!(whole.files(&asset_server), AvatarFiles::Loading);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while whole.files(&asset_server) == AvatarFiles::Loading {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the missing texture did not fail"
+        );
+        app.update();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(matches!(whole.files(&asset_server), AvatarFiles::Failed(_)));
 }
