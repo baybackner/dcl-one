@@ -122,6 +122,15 @@ class PlanTest(unittest.TestCase):
                          ('true', 'pending', 'test/e2e/Transform.spec.ts'))
         self.assertEqual((out['creator-hub-offline'], out['creator-hub-live']), ('false', 'false'))
 
+    def test_the_label_runs_the_live_tier_for_a_deploy_change(self):
+        out = pull_request(CH + 'renderer/src/modules/store/deployment/slice.ts', labels=['ci:creator-hub-e2e'])
+        self.assertEqual((out['inspector'], out['creator-hub-offline'], out['creator-hub-live']),
+                         ('false', 'true', 'true'))
+
+    def test_the_label_keeps_the_live_tier_off_for_other_app_changes(self):
+        out = pull_request(CH + 'renderer/src/components/Home/Home.tsx', labels=['ci:creator-hub-e2e'])
+        self.assertEqual((out['creator-hub-offline'], out['creator-hub-live']), ('true', 'false'))
+
     def test_a_push_takes_the_label_off(self):
         out = pull_request(E2E + 'Transform.spec.ts', labels=['ci:creator-hub-e2e'], action='synchronize')
         self.assertEqual((out['run'], out['state'], out['remove-label']), ('false', 'pending', 'true'))

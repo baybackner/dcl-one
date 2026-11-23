@@ -72,6 +72,7 @@ jobs:
       e2e-inspector: ${{ steps.plan.outputs.inspector }}
       e2e-inspector-specs: ${{ steps.plan.outputs.inspector-specs }}
       e2e-creator-hub-offline: ${{ steps.plan.outputs.creator-hub-offline }}
+      e2e-creator-hub-live: ${{ steps.plan.outputs.creator-hub-live }}
       release: ${{ steps.release.outputs.release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,6 +163,7 @@ jobs:
       inspector: ${{ needs.changes.outputs.e2e-inspector == 'true' }}
       inspector-specs: ${{ needs.changes.outputs.e2e-inspector-specs }}
       creator-hub-offline: ${{ needs.changes.outputs.e2e-creator-hub-offline == 'true' }}
+      creator-hub-live: ${{ needs.changes.outputs.e2e-creator-hub-live == 'true' }}
   e2e-status:
     name: e2e status
     needs: [ changes, e2e ]

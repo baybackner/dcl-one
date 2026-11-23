@@ -230,9 +230,14 @@ Each tier maps to a package script (all drive the packaged app, so they build/pa
 `test:e2e` runs `@offline` + `@live` locally (`pnpm run compile` then Playwright); `test:e2e:ci` is
 the CI form (packages with `electron-builder --dir` but skips the Vite rebuild that the
 `download-build` action already provides) and runs **`@offline` only**; `test:e2e:ci:live` runs
-`@live` against the app `test:e2e:ci` already packaged, and `e2e.yml` gates that step on
-`github.event_name != 'pull_request'` — real `.zone` deploys must never run on a PR, and the
-offline step is given no secrets at all; `test:e2e:live` runs only `@live` locally. **`@scene` is
+`@live` against the app `test:e2e:ci` already packaged. `e2e.yml` runs that step on `main`, on a
+manual run, and on a pull request whose changes touch the deploy flow (`creator-hub-live` in
+`apps/creator-hub/e2e-selection.json`) only once a maintainer adds the `ci:creator-hub-e2e` label:
+real `.zone` deploys never run on a pull request without that admission, a fork's pull request has
+no secrets and skips it, and the offline step is given no secrets at all. Every live run uses the
+same wallet, world and LAND, so the job holds one repository-wide concurrency group while live is
+selected; a third run waiting on it cancels the pending one, which a re-run recovers.
+`test:e2e:live` runs only `@live` locally. **`@scene` is
 deliberately not in those scripts** — creating a scene runs a live `npm install`, so it can fail on
 registry outages rather than real regressions, which would make it a flaky PR gate. Run it on demand
 with `test:e2e:scene`.
