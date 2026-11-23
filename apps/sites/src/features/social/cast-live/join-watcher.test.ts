@@ -42,6 +42,11 @@ describe("joinAsWatcher", () => {
     expect(join).not.toHaveBeenCalled();
   });
 
+  it("throws a token request that failed, which is no refusal", async () => {
+    const deps: WatchDeps = { getToken: vi.fn(async () => Promise.reject(new Error("offline"))), join: vi.fn() };
+    await expect(joinAsWatcher(identity, { location: "0,0" }, new AbortController().signal, deps)).rejects.toThrow("offline");
+  });
+
   it("disconnects a room that connected after the page left, and reports nothing", async () => {
     const session = fakeSession();
     const controller = new AbortController();
@@ -83,5 +88,14 @@ describe("joinAsWatcher", () => {
     await expect(joined).rejects.toThrow(NO_ANSWER);
     connect(session);
     await vi.waitFor(() => expect(session.disconnect).toHaveBeenCalledTimes(1));
+  });
+
+  it("says nothing of a join the page left before its bound", async () => {
+    const controller = new AbortController();
+    const settled = vi.fn();
+    answeredIn(5, controller.signal, () => new Promise(() => {})).then(settled, settled);
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).not.toHaveBeenCalled();
   });
 });

@@ -14,10 +14,17 @@ const SIDE_CLOSE_CLASS = "stcastwatcher__sideclose";
 const ICON_MUTE = 0;
 const ICON_CHAT = 1;
 
-type WatcherState = "onboarding" | "joining" | "live" | "waiting";
+type WatcherState = "onboarding" | "joining" | "live" | "waiting" | "ended";
 
-/** Why a real join did not go live: the watcher page shows it in place of the stream. */
-export type WatchRefusal = { kind: "waiting" | "error"; title: string; message: string };
+/** Waits before each automatic join after a lost connection; their number is the most tries. */
+const REJOIN_WAITS_MS = [2_000, 5_000, 10_000];
+
+/** Why a real join did not go live, or a watched room ended: the watcher page shows it in place
+ * of the stream. An `error` is the end card, with Join again when `again`. */
+export type WatchRefusal = { kind: "waiting" | "error"; title: string; message: string; again?: boolean };
+
+/** How a watched room went away: the connection was lost, or the server ended it on purpose. */
+export type WatchLoss = "network" | "removed";
 
 /** A join's outcome: connected to `roomId`, refused, or null while the sign-in dialog has the
  * visitor: the lobby stays, with no notice. */
@@ -25,15 +32,18 @@ export type WatchJoin = { roomId: string; refused?: undefined } | { refused: Wat
 
 /** A real LiveKit session behind the watcher page; the story page leaves it out. */
 export type WatchLive = {
-  join: () => Promise<WatchJoin>;
+  /** `auto`: the page joins again by itself, with a short bound. */
+  join: (auto: boolean) => Promise<WatchJoin>;
   leave: () => void;
   stage: (muted: boolean) => ReactNode;
   participantCount: number;
-  /** `live`: the Cast arrives. `reconnecting`: it is on air and does not arrive, or the room
-   * reconnects. `none`: nothing is on air, and the joined room reads as waiting. */
-  signal: "live" | "reconnecting" | "none";
+  /** `live`: the Cast arrives. `arriving`: its first picture is not there yet. `undecodable`: its
+   * sound arrives and this browser cannot decode its video. `reconnecting`: it is on air and does
+   * not arrive, or the room reconnects. `none`: nothing is on air, and the joined room reads as
+   * waiting. */
+  signal: "live" | "arriving" | "undecodable" | "reconnecting" | "none";
   /** Calls `onLost` when the room goes away while watching; answers the unsubscribe. */
-  bindLost: (onLost: () => void) => () => void;
+  bindLost: (onLost: (why: WatchLoss) => void) => () => void;
   /** The browser blocks playback until a click (Safari). */
   audioBlocked: boolean;
   enableAudio: () => void;
@@ -64,14 +74,43 @@ export default function CastWatch({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isTabMuted, setIsTabMuted] = useState(false);
   const [refusal, setRefusal] = useState<WatchRefusal | null>(null);
+  /** Automatic joins since the Cast last arrived or the viewer last joined. */
+  const [tries, setTries] = useState(0);
+  /** The next automatic join waits for its time. */
+  const [due, setDue] = useState(false);
 
   const roomId = watch.credentials?.roomId ?? "";
   const placeName = watch.placeName;
 
-  const join = useCallback(() => {
+  // A lost connection is joined again `REJOIN_WAITS_MS.length` times and no more: only the Cast
+  // that arrives, or a click, gives new tries. What the server ended waits for a click.
+  const lose = useCallback((why: WatchLoss) => {
+    onTrack("cast_watch_lost", { reason: why }, trackCtx);
+    if (why === "network") {
+      setTries((n) => n + 1);
+      setState("joining");
+      return setDue(true);
+    }
+    setRefusal({ kind: "error", title: "You were removed from this Cast", message: "The server closed your connection.", again: true });
+    setState("ended");
+  }, [onTrack, trackCtx]);
+  // The count changes in the render that shows its cause, never in a later effect: a loss
+  // between that render and its effects counts from the right number.
+  if (state === "live" && live?.signal === "live" && tries) setTries(0);
+  if (due && tries > REJOIN_WAITS_MS.length) {
+    const message = `The Cast did not return in ${REJOIN_WAITS_MS.length} tries.`;
+    setRefusal({ kind: "error", title: "The connection was lost", message, again: true });
+    setState("ended");
+    setDue(false);
+  }
+
+  const liveJoin = live?.join;
+  const join = useCallback((auto = false) => {
     setState("joining");
     setRefusal(null);
-    if (!live) {
+    setDue(false);
+    if (!auto) setTries(0);
+    if (!liveJoin) {
       onTrack(
         "cast_watch_joined",
         { room_id: roomId, place_name: placeName, stub: true },
@@ -80,16 +119,15 @@ export default function CastWatch({
       setTimeout(() => setState("live"), 600);
       return;
     }
-    live.join().then(
+    const refuse = (refused: WatchRefusal, reason = refused.title) => {
+      onTrack("cast_watch_refused", { kind: refused.kind, reason }, trackCtx);
+      setRefusal(refused);
+      setState(refused.kind === "waiting" ? "waiting" : "ended");
+    };
+    liveJoin(auto).then(
       (joined) => {
         if (!joined) return setState("onboarding");
-        if (joined.refused) {
-          const refused = joined.refused;
-          onTrack("cast_watch_refused", { kind: refused.kind, reason: refused.title }, trackCtx);
-          setRefusal(refused);
-          setState(refused.kind === "waiting" ? "waiting" : "onboarding");
-          return;
-        }
+        if (joined.refused) return refuse(joined.refused);
         onTrack(
           "cast_watch_joined",
           { room_id: joined.roomId, place_name: placeName, stub: false },
@@ -98,28 +136,27 @@ export default function CastWatch({
         setState("live");
       },
       (err: unknown) => {
+        // A join that failed is no refusal: an automatic one is a try that is used up.
+        if (auto) return lose("network");
         const reason = err instanceof Error ? err.message : "Try again in a moment.";
-        onTrack("cast_watch_refused", { kind: "error", reason }, trackCtx);
-        setRefusal({ kind: "error", title: "Could not join the cast", message: reason });
-        setState("onboarding");
+        refuse({ kind: "error", title: "Could not join the cast", message: reason, again: true }, reason);
       },
     );
-  }, [live, onTrack, roomId, placeName, trackCtx]);
+  }, [liveJoin, onTrack, roomId, placeName, trackCtx, lose]);
 
   const bindLost = live?.bindLost;
-  useEffect(
-    () =>
-      // A lost room is joined again: the join's own outcomes say what the Cast is now.
-      bindLost?.(() => {
-        onTrack("cast_watch_lost", { reason: "room closed" }, trackCtx);
-        join();
-      }),
-    [bindLost, onTrack, trackCtx, join],
-  );
+  useEffect(() => bindLost?.(lose), [bindLost, lose]);
+
+  useEffect(() => {
+    if (!due) return;
+    const timer = setTimeout(() => join(true), REJOIN_WAITS_MS[tries - 1]);
+    return () => clearTimeout(timer);
+  }, [due, tries, join]);
 
   const leave = useCallback(() => {
     onTrack("cast_watch_left", {}, trackCtx);
     live?.leave();
+    setDue(false);
     setSidebarOpen(false);
     setState("onboarding");
   }, [live, onTrack, trackCtx]);
@@ -184,6 +221,9 @@ export default function CastWatch({
     messages?: Array<{ name: string; time: string; body: string }>;
     watcherTitle?: ReactNode;
     watcherMessage?: ReactNode;
+    canRejoin?: boolean;
+    joiningLabel?: string;
+    canLeave?: boolean;
     toasts?: Array<{ title: ReactNode; message: ReactNode; action?: { label?: string; onClick?: () => void } }>;
     reconnecting?: boolean;
   }>;
@@ -191,13 +231,15 @@ export default function CastWatch({
   // LIVE only while the Cast arrives: a joined room with nothing on air waits like a link with no stream.
   const signal = state === "live" && live ? live.signal : "live";
   const shown = signal === "none" ? "waiting" : state;
+  // An automatic join waits or runs.
+  const retrying = state === "joining" && tries > 0;
   const reconnecting = signal === "reconnecting";
   const chatFooter = `Jump into ${placeName} in Decentraland to participate in the chat.`;
 
   return (
     <div
       className="cast-watch"
-      data-state={reconnecting ? signal : shown}
+      data-state={reconnecting || retrying ? "reconnecting" : shown}
       data-status={watch.status}
       data-location={watch.location}
       onClickCapture={onClickCapture}
@@ -207,7 +249,7 @@ export default function CastWatch({
           // The lobby names the place as the link does, before the join and after LEAVE.
           streamName={fallbackPlaceName(watch.location)}
           state={shown}
-          reconnecting={reconnecting}
+          reconnecting={signal !== "live"}
           sidebarOpen={shown === "live" && sidebarOpen}
           isTabMuted={isTabMuted}
           chatFooter={chatFooter}
@@ -215,14 +257,23 @@ export default function CastWatch({
           unreadCount={state === "live" && !sidebarOpen && !live ? unreadCount : 0}
           stage={live && state === "live" ? live.stage(isTabMuted) : undefined}
           messages={live ? [] : undefined}
-          watcherTitle={refusal?.kind === "waiting" ? refusal.title : undefined}
-          watcherMessage={refusal?.kind === "waiting" ? refusal.message : undefined}
+          watcherTitle={refusal?.title}
+          watcherMessage={refusal?.message}
+          canRejoin={refusal?.again}
+          joiningLabel={retrying ? `Reconnecting\u{2026} (${tries} of ${REJOIN_WAITS_MS.length})` : undefined}
+          canLeave={retrying}
           toasts={[
             ...(reconnecting
               ? [{ title: "Reconnecting\u{2026}", message: "The Cast does not arrive. It returns when the connection is back." }]
               : []),
-            ...(refusal?.kind === "error"
-              ? [{ title: refusal.title, message: refusal.message, action: { label: "Retry", onClick: join } }]
+            ...(signal === "undecodable"
+              ? [
+                  {
+                    title: "This browser cannot play the video of this Cast yet",
+                    message:
+                      "The sound plays. The video starts by itself when the browser has its video decoder. You can also open this Cast in another browser.",
+                  },
+                ]
               : []),
             ...(live?.audioBlocked && state === "live"
               ? [

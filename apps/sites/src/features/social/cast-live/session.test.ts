@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Room, RoomEvent as RoomEventEnum } from "livekit-client";
 
-import { RECONNECT_LIMIT_MS, STALL_MS, sessionOf } from "./session";
+import { RECONNECT_LIMIT_MS, STALL_MS, canDecode, sessionOf } from "./session";
 
 // The string values of livekit-client's RoomEvent members this module listens to.
 const RoomEvent = {
@@ -9,6 +9,8 @@ const RoomEvent = {
   TrackUnpublished: "trackUnpublished",
   TrackSubscribed: "trackSubscribed",
   TrackUnsubscribed: "trackUnsubscribed",
+  TrackSubscriptionStatusChanged: "trackSubscriptionStatusChanged",
+  TrackSubscriptionFailed: "trackSubscriptionFailed",
   TrackMuted: "trackMuted",
   TrackUnmuted: "trackUnmuted",
   LocalTrackPublished: "localTrackPublished",
@@ -17,10 +19,11 @@ const RoomEvent = {
   ParticipantDisconnected: "participantDisconnected",
   AudioPlaybackStatusChanged: "audioPlaybackChanged",
   ConnectionStateChanged: "connectionStateChanged",
+  Disconnected: "disconnected",
   ConnectionQualityChanged: "connectionQualityChanged",
 } as unknown as typeof RoomEventEnum;
 
-type Pub = { source: string; trackSid: string; isMuted: boolean; track: object | undefined; isEnabled?: boolean; kind?: string };
+type Pub = { source: string; trackSid: string; isMuted: boolean; track: object | undefined; isEnabled?: boolean; kind?: string; mimeType?: string };
 
 function standInRoom() {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -52,14 +55,18 @@ function standInRoom() {
 /** A remote camera whose decoded-frame counter the test moves. */
 function remoteCamera(room: ReturnType<typeof standInRoom>, pub: Partial<Pub> = {}) {
   const media = { frames: 0 };
-  const track = { getRTCStatsReport: async () => new Map([["in", { type: "inbound-rtp", framesDecoded: media.frames }]]) };
-  const all: Pub = { source: "camera", trackSid: "TR_v", isMuted: false, isEnabled: true, track, ...pub };
+  const track = {
+    attachedElements: [] as Array<{ videoWidth: number }>,
+    getRTCStatsReport: async () => new Map([["in", { type: "inbound-rtp", framesDecoded: media.frames }]]),
+  };
+  const all: Pub = { source: "camera", kind: "video", trackSid: "TR_v", isMuted: false, isEnabled: true, track, ...pub };
   room.remoteParticipants.set("s", { identity: "stream:place:uuid", trackPublications: new Map([["v", all]]) });
-  return media;
+  return Object.assign(media, { track });
 }
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("sessionOf", () => {
@@ -92,11 +99,12 @@ describe("sessionOf", () => {
 
   it("lists local and remote tracks with their source, mute and identity, skipping unsubscribed ones", () => {
     const room = standInRoom();
-    room.localParticipant.trackPublications.set("a", { source: "camera", trackSid: "TR_a", isMuted: false, track: {} });
+    const track = { attachedElements: [] };
+    room.localParticipant.trackPublications.set("a", { source: "camera", trackSid: "TR_a", isMuted: false, track });
     room.remoteParticipants.set("w", {
       identity: "0xabc",
       trackPublications: new Map([
-        ["b", { source: "microphone", trackSid: "TR_b", isMuted: true, track: {} }],
+        ["b", { source: "microphone", trackSid: "TR_b", isMuted: true, track }],
         ["c", { source: "camera", trackSid: "TR_c", isMuted: false, track: undefined }],
       ]),
     });
@@ -110,15 +118,85 @@ describe("sessionOf", () => {
     expect(s.isPublishing("screen_share")).toBe(false);
   });
 
+  it("has a video on air while another participant has an unmuted one, subscribed or not", () => {
+    const room = standInRoom();
+    const s = sessionOf(room as unknown as Room, RoomEvent);
+    const pub: Pub = { source: "screen_share", kind: "video", trackSid: "TR_v", isMuted: true, track: undefined };
+    room.remoteParticipants.set("s", { identity: "stream:place:uuid", trackPublications: new Map([["v", pub], ["a", { ...pub, kind: "audio", isMuted: false }]]) });
+    expect(s.videoOnAir()).toBe(false);
+    pub.isMuted = false;
+    expect(s.videoOnAir()).toBe(true);
+  });
+
+  it("says a track has a picture once an element it is attached to shows a frame, and tells its listeners", () => {
+    const room = standInRoom();
+    const { track } = remoteCamera(room);
+    const s = sessionOf(room as unknown as Room, RoomEvent);
+    const on = vi.fn();
+    room.emit("trackSubscribed", { on });
+    const listener = vi.fn();
+    s.subscribe(listener);
+    const element = { videoWidth: 0, addEventListener: vi.fn() };
+    track.attachedElements.push(element);
+    on.mock.calls[0]![1](element);
+    expect(s.tracks()[0]!.picture).toBe(false);
+
+    element.videoWidth = 640;
+    element.addEventListener.mock.calls.find(([event]) => event === "loadedmetadata")![1]();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(s.tracks()[0]!.picture).toBe(true);
+  });
+
+  it("names the codec of a video that the server refused for it, while the video is on air with no track", () => {
+    const room = standInRoom();
+    const s = sessionOf(room as unknown as Room, RoomEvent);
+    const listener = vi.fn();
+    s.subscribe(listener);
+    const pub: Pub = { source: "camera", kind: "video", mimeType: "video/H264", trackSid: "TR_v", isMuted: false, track: undefined };
+    const ingress = { identity: "uuid-streamer", trackPublications: new Map([["TR_v", pub]]) };
+    room.remoteParticipants.set("i", ingress);
+    // livekit's SubscriptionError: 2 = the track was not found, 1 = no codec of it for this browser.
+    room.emit("trackSubscriptionFailed", "TR_v", ingress, 2);
+    expect(s.undecodable()).toBeNull();
+    room.emit("trackSubscriptionFailed", "TR_v", ingress, 1);
+    expect(s.undecodable()).toBe("video/H264");
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    // The refused track still comes, and goes at once: only the status change tells it is gone.
+    pub.track = {};
+    expect(s.undecodable()).toBeNull();
+    pub.track = undefined;
+    room.emit("trackSubscriptionStatusChanged");
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(s.undecodable()).toBe("video/H264");
+    pub.isMuted = true;
+    expect(s.undecodable()).toBeNull();
+  });
+
   it("is already disconnected when its listeners hear the room close, and a later leave does not call the room", async () => {
     const room = standInRoom();
     const s = sessionOf(room as unknown as Room, RoomEvent);
     const seen: boolean[] = [];
     s.subscribe(() => seen.push(s.disconnected()));
     room.emit("connectionStateChanged", "disconnected");
+    room.emit("disconnected");
     expect(seen).toEqual([true]);
     await s.disconnect();
     expect(room.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("tells a removal by the server from a lost connection when its listeners hear the room close", () => {
+    // livekit's DisconnectReason: none when its retries end, 1 at the page's limit, 3 a server that stops.
+    const reasons = [[undefined, false], [1, false], [3, false], [2, true], [4, true], [5, true], [10, true]] as const;
+    for (const [reason, removed] of reasons) {
+      const room = standInRoom();
+      const s = sessionOf(room as unknown as Room, RoomEvent);
+      const seen: boolean[] = [];
+      s.subscribe(() => seen.push(s.disconnected() && s.removed()));
+      room.emit("connectionStateChanged", "disconnected");
+      room.emit("disconnected", reason);
+      expect(seen).toEqual([removed]);
+    }
   });
 
 });
@@ -246,5 +324,14 @@ describe("sessionOf", () => {
       await vi.advanceTimersByTimeAsync(ms / 2);
       expect(room.disconnect).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+describe("canDecode", () => {
+  it("is true only for a codec this browser lists, in any letter case", () => {
+    expect(canDecode("video/H264")).toBe(false);
+    vi.stubGlobal("RTCRtpReceiver", { getCapabilities: () => ({ codecs: [{ mimeType: "video/VP8" }, { mimeType: "video/h264" }] }) });
+    expect(canDecode("video/H264")).toBe(true);
+    expect(canDecode("video/AV1")).toBe(false);
   });
 });

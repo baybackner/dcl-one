@@ -146,13 +146,15 @@ function ChatSidebar({
   )
 }
 
+const focus = (el: HTMLElement | null) => el?.focus()
+
 const DEMO_MESSAGES: ChatMessage[] = [
   { name: '0x7a3f...c21d', time: '2:14 PM', body: 'this build looks incredible \u{1F525}' },
   { name: 'metahopper.dcl.eth', time: '2:15 PM', body: 'where can i grab those wearables?' },
   { name: '0x91be...4f08', time: '2:16 PM', body: 'gm everyone, just jumped in' }
 ]
 
-type WatcherState = 'onboarding' | 'joining' | 'live' | 'waiting'
+type WatcherState = 'onboarding' | 'joining' | 'live' | 'waiting' | 'ended'
 type WatcherToastAction = { label?: string; onClick?: () => void }
 type WatcherToast = { title: ReactNode; message: ReactNode; action?: string | WatcherToastAction }
 
@@ -164,12 +166,17 @@ type StCastWatcherProps = {
   viewerTag?: ReactNode
   joinLabel?: ReactNode
   joiningLabel?: ReactNode
+  /** The joining view offers Leave: the page joins again by itself. */
+  canLeave?: boolean
   leaveLabel?: ReactNode
   liveLabel?: ReactNode
   chatTitle?: ReactNode
   chatFooter?: ReactNode
+  /** The title and the message of the waiting view and of the end card. */
   watcherTitle?: ReactNode
   watcherMessage?: ReactNode
+  /** The end card offers Join again. */
+  canRejoin?: boolean
   toasts?: WatcherToast[]
   participantCount?: number
   unreadCount?: number
@@ -189,12 +196,14 @@ export default function StCastWatcher({
   viewerTag = 'Viewer',
   joinLabel = 'JOIN NOW',
   joiningLabel = 'Joining...',
+  canLeave = false,
   leaveLabel = 'Leave',
   liveLabel = 'LIVE',
   chatTitle = 'In-World Chat',
   chatFooter = 'Jump into Genesis Plaza in Decentraland to participate in the chat.',
   watcherTitle = 'No one is currently casting to this link...',
   watcherMessage = 'This Decentraland Cast may be starting soon or has already ended.',
+  canRejoin = true,
   toasts = [],
   participantCount = 12,
   unreadCount = 0,
@@ -239,7 +248,43 @@ export default function StCastWatcher({
             <DclLogo />
           </span>
           <Spinner className={spinnerStyles.ring} variant="light" aria-hidden="true" />
-          <p className="stcastwatcher__joiningtext">{joiningLabel}</p>
+          <p className="stcastwatcher__joiningtext" aria-live="polite">
+            {joiningLabel}
+          </p>
+          {canLeave && (
+            <button type="button" className="stcastwatcher__leave">
+              <CallEndIcon />
+              {leaveLabel}
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  } else if (state === 'ended') {
+    body = (
+      <div className="stcastwatcher__onboard">
+        <div
+          className="stcastwatcher__modal"
+          role="alertdialog"
+          aria-labelledby="stcastwatcher-endtitle"
+          aria-describedby="stcastwatcher-endmessage"
+          tabIndex={-1}
+          ref={focus}
+        >
+          <span className="stcastwatcher__logo">
+            <DclLogo />
+          </span>
+          <h1 id="stcastwatcher-endtitle" className="stcastwatcher__title">
+            {watcherTitle}
+          </h1>
+          <p id="stcastwatcher-endmessage" className="stcastwatcher__tag">
+            {watcherMessage}
+          </p>
+          {canRejoin && (
+            <button type="button" className="stcastwatcher__join">
+              Join again
+            </button>
+          )}
         </div>
       </div>
     )

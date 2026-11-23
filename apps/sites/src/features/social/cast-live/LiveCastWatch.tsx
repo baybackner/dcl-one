@@ -13,36 +13,36 @@ import type { TrackContext } from "@/core/lib/telemetry/track";
 
 import { openSignIn } from "../../components/auth/signin-store";
 import { JOIN_TIMEOUT_MS, NO_ANSWER } from "../cast-stream/machine";
-import CastWatch, { type WatchJoin, type WatchLive, type WatchRefusal } from "../cast-watch/CastWatch";
-import { WatcherStage, useCastTracks } from "./CastStage";
-import { joinCast, type CastSession } from "./session";
+import CastWatch, { type WatchJoin, type WatchLive, type WatchLoss, type WatchRefusal } from "../cast-watch/CastWatch";
+import { WatcherStage, useCastTracks, useWatcherStage } from "./CastStage";
+import { canDecode, joinCast, type CastSession } from "./session";
 import { stalledCast } from "./stage";
 
-/** How the gatekeeper's refusals of `POST /cast/watcher-token` read on the page. */
-export function watchRefusal(err: unknown): WatchRefusal {
-  const status = err instanceof CatalystError ? err.status : 0;
-  const server = err instanceof CatalystError && err.serverMessage ? err.message : null;
-  if (status === 404) {
+/** How the gatekeeper's refusals of `POST /cast/watcher-token` read on the page. Null for a
+ * request that failed, which is no refusal. */
+export function watchRefusal(err: unknown): WatchRefusal | null {
+  if (!(err instanceof CatalystError) || err.status < 400 || err.status >= 500) return null;
+  const server = err.serverMessage ? err.message : "";
+  if (err.status === 404 && !server.includes("place found")) {
     return {
       kind: "waiting",
       title: "No one is currently casting to this link...",
       message: "This Decentraland Cast may be starting soon or has already ended.",
     };
   }
-  if (status === 401 && server === "Stream access has expired") {
+  if (err.status === 401 && server.startsWith("Stream access has expired")) {
     return {
       kind: "waiting",
       title: "This Cast has ended",
       message: "The stream link for this place has expired.",
     };
   }
-  if (status === 403) {
-    return { kind: "error", title: "You can't watch this Cast", message: server ?? "Access denied." };
-  }
   return {
     kind: "error",
-    title: "Could not join the cast",
-    message: err instanceof Error ? err.message : "Try again in a moment.",
+    title: "You cannot join this Cast",
+    message: server || "Access denied.",
+    // A ban holds for a new join; a place or a world's access can come back.
+    again: err.status !== 403 && !server.includes("deny-listed"),
   };
 }
 
@@ -53,12 +53,22 @@ export type WatchDeps = {
 
 const LIVE_DEPS: WatchDeps = { getToken: getWatcherToken, join: (c, o) => joinCast(c, o) };
 
+/** An automatic join has this long to answer, so the three tries of a lost Cast end in 47 s (their
+ * waits and three bounds), not in 152 s. A join by a click keeps `JOIN_TIMEOUT_MS`. */
+export const REJOIN_TIMEOUT_MS = 10_000;
+
+/** How often the page asks the browser for the codec of a video it could not decode, and how
+ * many times it joins again for it. Longer than `REJOIN_TIMEOUT_MS`: a join has its answer
+ * before the next. */
+const CODEC_RETRY_MS = 15_000;
+const CODEC_REJOINS = 3;
+
 /** `run`'s answer, or a rejection with `NO_ANSWER` when it has none in `ms`: its signal aborts
- * then, as it does with `signal`. */
+ * then, as it does with `signal`. A run the page abandoned (`signal`) is never rejected. */
 export function answeredIn<T>(ms: number, signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const timeout = AbortSignal.timeout(ms);
   const late = new Promise<never>((_, reject) =>
-    timeout.addEventListener("abort", () => reject(new Error(NO_ANSWER))),
+    timeout.addEventListener("abort", () => signal.aborted || reject(new Error(NO_ANSWER))),
   );
   return Promise.race([run(AbortSignal.any([signal, timeout])), late]);
 }
@@ -80,7 +90,9 @@ export async function joinAsWatcher(
     );
   } catch (err) {
     if (signal.aborted) return null;
-    return { refused: watchRefusal(err) };
+    const refused = watchRefusal(err);
+    if (!refused) throw err;
+    return { refused };
   }
   if (signal.aborted) return null;
   let session: CastSession;
@@ -112,6 +124,7 @@ export default function LiveCastWatch({
   const sessionRef = useRef<CastSession | null>(null);
   const aborter = useRef<AbortController | null>(null);
   const tracks = useCastTracks(session);
+  const stage = useWatcherStage(tracks);
   const [placeName, setPlaceName] = useState(() => fallbackPlaceName(location));
 
   useEffect(
@@ -123,7 +136,7 @@ export default function LiveCastWatch({
     [],
   );
 
-  const join = useCallback(async (): Promise<WatchJoin> => {
+  const join = useCallback(async (auto: boolean): Promise<WatchJoin> => {
     if (!identity) {
       openSignIn();
       return {
@@ -137,7 +150,7 @@ export default function LiveCastWatch({
     aborter.current?.abort();
     const controller = new AbortController();
     aborter.current = controller;
-    const joined = await answeredIn(JOIN_TIMEOUT_MS, controller.signal, (signal) =>
+    const joined = await answeredIn(auto ? REJOIN_TIMEOUT_MS : JOIN_TIMEOUT_MS, controller.signal, (signal) =>
       joinAsWatcher(identity, { location, parcel }, signal),
     );
     // Abandoned: the page left or a newer join started. Never settles, so nothing renders.
@@ -158,14 +171,14 @@ export default function LiveCastWatch({
   }, []);
 
   const bindLost = useCallback(
-    (onLost: () => void) => {
+    (onLost: (why: WatchLoss) => void) => {
       if (!session) return () => {};
       return session.subscribe(() => {
         // Our own leave clears the ref first; anything else is a lost room.
         if (session.disconnected() && sessionRef.current === session) {
           sessionRef.current = null;
           setSession(null);
-          onLost();
+          onLost(session.removed() ? "removed" : "network");
         }
       });
     },
@@ -175,20 +188,39 @@ export default function LiveCastWatch({
   const audioBlocked = session ? !session.canPlaybackAudio() : false;
   // A whole reconnection empties the room, so it is asked before what is on air.
   const onAir = session?.onAir();
-  const away = session?.reconnecting() === "all" || (onAir && stalledCast(tracks));
-  const signal = away ? "reconnecting" : onAir ? "live" : "none";
+  const away = session?.reconnecting() === "all" || (onAir && stalledCast(tracks, stage.shown));
+  // LIVE needs the picture of the stage; a Cast with no video has none to wait for.
+  const picture = stage.shown ? stage.shown.picture : !session?.videoOnAir();
+  const codec = session?.undecodable() ?? null;
+  const signal = away ? "reconnecting" : !onAir ? "none" : picture ? "live" : codec ? "undecodable" : "arriving";
+
+  // The video comes only on a connection made after the browser has the codec: the page joins
+  // again then, and the room it leaves plays its sound until the new one is there.
+  const codecJoins = useRef(CODEC_REJOINS);
+  useEffect(() => {
+    if (!session || !codec) return;
+    const timer = setInterval(() => {
+      if (codecJoins.current === 0 || !canDecode(codec)) return;
+      codecJoins.current -= 1;
+      join(true).then(
+        (joined) => joined?.roomId && void session.disconnect(),
+        () => {},
+      );
+    }, CODEC_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [session, codec, join]);
   const live = useMemo<WatchLive>(
     () => ({
       join,
       leave,
       bindLost,
-      stage: (muted) => <WatcherStage tracks={tracks} muted={muted} />,
+      stage: (muted) => <WatcherStage tracks={tracks} stage={stage} muted={muted} />,
       participantCount: session ? session.participantCount() : 0,
       signal,
       audioBlocked,
       enableAudio: () => void session?.startAudio(),
     }),
-    [join, leave, bindLost, tracks, session, audioBlocked, signal],
+    [join, leave, bindLost, tracks, stage, session, audioBlocked, signal],
   );
 
   const watch: WatchResult = {

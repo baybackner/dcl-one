@@ -4,6 +4,7 @@ import type { Room, RoomEvent as RoomEventEnum, Track, TrackPublication } from "
 
 import type { CastCredentials } from "@/data/lib/catalyst/cast";
 
+import { claimPresenter } from "./presenter";
 import { isPerson, type CastSource, type StageCandidate } from "./stage";
 
 /** Remote media that did not advance for this long is stalled (seen 6 to 8 s after its last frame). */
@@ -16,6 +17,11 @@ const SAMPLE_MS = 2_000;
  * loses its screen share and must press Rejoin, so it waits as long as LiveKit's own retries
  * are known to succeed (a 90 s outage). */
 export const RECONNECT_LIMIT_MS = { watcher: 30_000, streamer: 120_000 };
+/** livekit's `DisconnectReason` values the server chose: DUPLICATE_IDENTITY, PARTICIPANT_REMOVED,
+ * ROOM_DELETED, ROOM_CLOSED. Any other end of the room is a lost connection. */
+const SERVER_ENDED = [2, 4, 5, 10];
+/** livekit's `SubscriptionError.SE_CODEC_UNSUPPORTED`. */
+const CODEC_UNSUPPORTED = 1;
 
 export type StageTrack = StageCandidate & {
   /** Stable key for rendering. */
@@ -30,6 +36,12 @@ export type CastSession = {
   participantCount: () => number;
   /** Another participant has an unmuted track: the Cast is live. */
   onAir: () => boolean;
+  /** Another participant has an unmuted video, subscribed or not: the stage must get a picture. */
+  videoOnAir: () => boolean;
+  /** The codec (`video/H264`) of a video on air that the server refused to send, because this
+   * browser listed no decoder for it when it connected. The refusal holds for the connection,
+   * also when the browser gets the decoder later: only a new join gets the video. */
+  undecodable: () => string | null;
   /** What LiveKit restores: `signal` (media can still flow), or `all` (none does; also while the
    * server reports this page's media lost). Null while connected. */
   reconnecting: () => "signal" | "all" | null;
@@ -49,6 +61,8 @@ export type CastSession = {
   /** True once the room is gone: the server closed it, removed us, or reconnection gave up or
    * lasted its `RECONNECT_LIMIT_MS`. */
   disconnected: () => boolean;
+  /** The server ended it on purpose (a kick, a ban, a deleted room): a new join needs a click. */
+  removed: () => boolean;
   disconnect: () => Promise<void>;
 };
 
@@ -65,6 +79,7 @@ function candidate(pub: TrackPublication, identity: string, local: boolean, stal
     muted: pub.isMuted,
     local,
     stalled: stalled.has(track),
+    picture: track.attachedElements.some((element) => (element as HTMLVideoElement).videoWidth > 0),
     track,
   };
 }
@@ -76,6 +91,8 @@ function watchedEvents(RoomEvent: typeof RoomEventEnum): RoomEventEnum[] {
     RoomEvent.TrackUnpublished,
     RoomEvent.TrackSubscribed,
     RoomEvent.TrackUnsubscribed,
+    // `TrackUnsubscribed` comes while the publication still has its track; this one comes after.
+    RoomEvent.TrackSubscriptionStatusChanged,
     RoomEvent.TrackMuted,
     RoomEvent.TrackUnmuted,
     RoomEvent.LocalTrackPublished,
@@ -130,12 +147,23 @@ export function sessionOf(
   };
   const sampler = setInterval(() => void sample(), SAMPLE_MS);
 
-  // An element that starts to play changes `canPlaybackAudio`, and no room event says so.
+  // An element that starts to play changes `canPlaybackAudio`, one that has its first frame
+  // changes `picture`, and no room event says so.
   room.on(RoomEvent.TrackSubscribed, (track) =>
-    track.on("elementAttached", (element) => element.addEventListener("playing", notify)),
+    track.on("elementAttached", (element) => {
+      element.addEventListener("playing", notify);
+      element.addEventListener("loadedmetadata", notify);
+    }),
   );
   const audioElements = () =>
     remotePubs().flatMap((pub) => (pub.kind === "audio" ? (pub.track?.attachedElements ?? []) : []));
+
+  const refused = new Set<TrackPublication>();
+  room.on(RoomEvent.TrackSubscriptionFailed, (sid, participant, reason) => {
+    const pub = participant.trackPublications.get(sid);
+    if (pub && reason === CODEC_UNSUPPORTED) refused.add(pub);
+    notify();
+  });
 
   // livekit-client's `ConnectionState`, set before anyone is told: a listener reads
   // `disconnected() === true`.
@@ -152,7 +180,15 @@ export function sessionOf(
     if (to === "disconnected") clearInterval(sampler);
     notify();
   };
-  room.on(RoomEvent.ConnectionStateChanged, settle);
+  // The room gives its reason with `Disconnected`, after the state change: the end settles there.
+  let removed = false;
+  room.on(RoomEvent.ConnectionStateChanged, (to) => {
+    if (to !== "disconnected") settle(to);
+  });
+  room.on(RoomEvent.Disconnected, (reason) => {
+    removed = SERVER_ENDED.includes(reason ?? 0);
+    settle("disconnected");
+  });
 
   return {
     tracks: () => {
@@ -173,6 +209,9 @@ export function sessionOf(
     participantCount: () =>
       1 + remotes().filter((p) => isPerson(p.identity, p.trackPublications.size > 0)).length,
     onAir: () => remotePubs().some((pub) => !pub.isMuted),
+    videoOnAir: () => remotePubs().some((pub) => !pub.isMuted && pub.kind === "video"),
+    // A refused track still comes for a moment: it is undecodable while it has none.
+    undecodable: () => remotePubs().find((pub) => refused.has(pub) && !pub.track && !pub.isMuted)?.mimeType ?? null,
     reconnecting: () =>
       link === "signalReconnecting"
         ? "signal"
@@ -215,6 +254,7 @@ export function sessionOf(
       notify();
     },
     disconnected: () => link === "disconnected",
+    removed: () => removed,
     disconnect: async () => {
       if (link !== "disconnected") await room.disconnect();
       settle("disconnected");
@@ -223,8 +263,8 @@ export function sessionOf(
 }
 
 /** Connects with the token the gatekeeper minted. A streamer then publishes what `publish` names
- * (a missing device is skipped, not fatal: a microphone and a screen share make a Cast); a
- * watcher's token is subscribe-only and publishes nothing. */
+ * (a missing device is skipped, not fatal: a microphone and a screen share make a Cast) and
+ * claims the room's presentation; a watcher's token is subscribe-only and publishes nothing. */
 export async function joinCast(
   credentials: CastCredentials,
   opts: { publish?: Publish; signal?: AbortSignal } = {},
@@ -247,8 +287,16 @@ export async function joinCast(
       await session.disconnect();
       throw (enabled[0] as PromiseRejectedResult).reason;
     }
+    claimPresenter(room, RoomEvent);
   }
   return session;
+}
+
+/** This browser lists a decoder for `mimeType`. A new Firefox profile lists H.264 only after it
+ * has fetched the codec, in about its first minute. */
+export function canDecode(mimeType: string): boolean {
+  const codecs = globalThis.RTCRtpReceiver?.getCapabilities?.("video")?.codecs ?? [];
+  return codecs.some((codec) => codec.mimeType.toLowerCase() === mimeType.toLowerCase());
 }
 
 /** Which of the camera and microphone this browser may open, each asked for on its own so a

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const facts = vi.hoisted(() => {
   Object.assign(window, { __vite_plugin_react_preamble_installed__: true });
-  return { identity: null as { signer: string } | null, openSignIn: vi.fn() };
+  return { identity: null as { signer: string } | null, openSignIn: vi.fn(), lost: false, listeners: new Set<() => void>(), tracks: [] as object[], codec: null as string | null, decodes: false, join: vi.fn(), disconnect: vi.fn(async () => {}) };
 });
 vi.mock("@/data/lib/auth/context", () => ({ useAuth: () => ({ identity: facts.identity }) }));
 vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
@@ -16,10 +16,13 @@ vi.mock("@/data/lib/catalyst/cast", async (original) => ({
   getWatcherToken: async () => ({ url: "wss://livekit.test", token: "jwt", roomId: "room-1", identity: "Ada", placeName: "Cast Platforms Plaza" }),
 }));
 vi.mock("./session", () => ({
-  joinCast: async () => ({ tracks: () => [], participantCount: () => 1, onAir: () => true, reconnecting: () => null, disconnected: () => false, subscribe: () => () => {}, canPlaybackAudio: () => true, disconnect: async () => {} }),
+  canDecode: () => facts.decodes,
+  joinCast: facts.join.mockImplementation(async () => ({ undecodable: () => facts.codec, tracks: () => facts.tracks, videoOnAir: () => facts.tracks.length > 0 || facts.codec !== null, participantCount: () => 1, onAir: () => true, reconnecting: () => null, disconnected: () => facts.lost, removed: () => false, subscribe: (l: () => void) => (facts.listeners.add(l), () => facts.listeners.delete(l)), canPlaybackAudio: () => true, disconnect: facts.disconnect })),
 }));
 
+import { useCastTracks } from "./CastStage";
 import LiveCastWatch from "./LiveCastWatch";
+import type { CastSession } from "./session";
 
 const WORLD = "stage.dcl.eth";
 const LOBBY = { name: `Decentraland Cast from ${WORLD}` };
@@ -29,10 +32,47 @@ function open() {
   render(<RouterProvider router={createMemoryRouter([{ path: "/", Component: Page }])} />);
 }
 
+/** A remote video of the streamer, as the session lists it. */
+function video(source: "camera" | "screen_share", facts: { picture?: boolean; stalled?: boolean } = {}) {
+  const track = { attach: vi.fn(), detach: vi.fn() };
+  return { key: source, identity: "stream:place:uuid", source, muted: false, local: false, stalled: false, picture: true, track, ...facts };
+}
+
+/** How many tracks the page has of a session. A hook call in a test's own function fails the file's transform. */
+function TrackCount({ session }: { session: CastSession }) {
+  return <output>{useCastTracks(session).length}</output>;
+}
+
+/** The room now has these tracks. */
+function air(...tracks: object[]) {
+  facts.tracks = tracks;
+  act(() => facts.listeners.forEach((l) => l()));
+}
+
+const shown = () => [...document.querySelectorAll("video")].map((v) => `${v.dataset.source}${v.style.opacity === "0" ? " (unseen)" : ""}`);
+
+/** Holds the page's timers from now on. A call of `vi.use…` in a test's own function fails the file's transform. */
+function hold() {
+  vi.useFakeTimers();
+}
+
+/** The joined page loses its room; its timers are held from then on. */
+function lose() {
+  hold();
+  facts.lost = true;
+  act(() => facts.listeners.forEach((l) => l()));
+  facts.lost = false;
+}
+
 afterEach(() => {
   cleanup();
   facts.identity = null;
   facts.openSignIn.mockClear();
+  Object.assign(facts, { tracks: [], codec: null, decodes: false });
+  facts.join.mockClear();
+  facts.disconnect.mockClear();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("the Cast watcher page", () => {
@@ -43,5 +83,81 @@ describe("the Cast watcher page", () => {
     fireEvent.click(screen.getByRole("button", { name: "JOIN NOW" }));
     fireEvent.click(await screen.findByRole("button", { name: "Leave" }));
     expect(await screen.findByRole("heading", LOBBY)).toBeTruthy();
+  });
+
+  it("keeps the camera until a screen share has its picture, then keeps the share, stalled, with the notice and no LIVE", async () => {
+    facts.identity = { signer: "0x" + "ab".repeat(20) };
+    const camera = video("camera");
+    const share = video("screen_share", { picture: false });
+    facts.tracks = [video("camera", { picture: false })];
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    await screen.findByRole("button", { name: "Leave" });
+    expect(screen.queryByText("LIVE")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    air(camera, share);
+    expect(shown()).toEqual(["camera", "screen_share (unseen)"]);
+    expect(screen.getByText("LIVE")).toBeTruthy();
+
+    const element = document.querySelectorAll("video")[1];
+    air(camera, { ...share, picture: true });
+    expect(shown()).toEqual(["screen_share"]);
+    expect(document.querySelector("video")).toBe(element);
+    expect(share.track.attach).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("LIVE")).toBeTruthy();
+
+    air(camera, { ...share, picture: true, stalled: true });
+    expect(shown()).toEqual(["screen_share"]);
+    expect(screen.queryByText("LIVE")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("Reconnecting");
+  });
+
+  it("says that the browser cannot play the video, and joins again by itself when the browser has the codec, three times at most", async () => {
+    facts.identity = { signer: "0x" + "ab".repeat(20) };
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    await screen.findByText("LIVE");
+
+    hold();
+    facts.codec = "video/H264";
+    air();
+    expect(screen.getByRole("status").textContent).toContain("This browser cannot play the video of this Cast yet");
+    expect(screen.queryByText("LIVE")).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(facts.join).toHaveBeenCalledTimes(1);
+    facts.decodes = true;
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(facts.join).toHaveBeenCalledTimes(2);
+    expect(facts.disconnect).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Leave" })).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(facts.join).toHaveBeenCalledTimes(4);
+
+    facts.codec = null;
+    air(video("camera"));
+    expect(screen.getByText("LIVE")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("reads the room again when it starts to listen, for an event that came before", () => {
+    const room = { tracks: [] as object[] };
+    const early = () => ((room.tracks = [video("camera")]), () => {});
+    render(<TrackCount session={{ tracks: () => room.tracks, subscribe: early } as unknown as CastSession} />);
+    expect(screen.getByRole("status").textContent).toBe("1");
+  });
+
+  it("gives a join by a click 45 s to answer, and an automatic join 10 s", async () => {
+    const bound = vi.spyOn(AbortSignal, "timeout");
+    facts.identity = { signer: "0x" + "ab".repeat(20) };
+    open();
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    await screen.findByText("LIVE");
+    expect(bound).toHaveBeenLastCalledWith(45_000);
+
+    lose();
+    expect(screen.getByText("Reconnecting\u{2026} (1 of 3)")).toBeTruthy();
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(bound).toHaveBeenLastCalledWith(10_000);
   });
 });

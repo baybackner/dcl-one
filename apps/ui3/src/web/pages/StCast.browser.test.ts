@@ -20,6 +20,8 @@ const pages = {
   watcherLobby: createElement(StCastWatcher, { state: "onboarding", streamName: WORLD }),
   watcherLive: createElement(StCastWatcher, { state: "live", stage, sidebarOpen: false }),
   watcherChat: createElement(StCastWatcher, { state: "live", stage, sidebarOpen: true }),
+  watcherRetry: createElement(StCastWatcher, { state: "joining", joiningLabel: "Reconnecting\u{2026} (1 of 3)", canLeave: true }),
+  watcherEnded: createElement(StCastWatcher, { state: "ended", watcherTitle: "You were removed from this Cast" }),
   watcherNotice: createElement(StCastWatcher, { state: "live", stage, sidebarOpen: false, toasts: [notice] }),
 };
 

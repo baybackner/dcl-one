@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +8,7 @@ vi.hoisted(() => {
 });
 vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children: import("react").ReactNode }) => <>{children}</> }));
 
-import CastWatch, { type WatchLive } from "./CastWatch";
+import CastWatch, { type WatchLive, type WatchLoss } from "./CastWatch";
 
 const WATCH = { status: "live", location: "0,0", isWorld: false, placeName: "Test Plaza", identity: "Guest#1" } as const;
 
@@ -35,7 +35,23 @@ async function joined(live: Partial<WatchLive>) {
 
 const people = () => screen.getByRole("button", { name: "Participants" }).textContent;
 
-afterEach(cleanup);
+/** The joined page with its timers held; the answer loses its room. */
+async function watching(live: Partial<WatchLive>) {
+  let lost = (_why: WatchLoss) => {};
+  await joined({ bindLost: (onLost) => ((lost = onLost), () => {}), ...live });
+  await screen.findByRole("button", { name: "Leave" });
+  vi.useFakeTimers();
+  return (why: WatchLoss) => act(() => lost(why));
+}
+
+const pass = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
+const tries = (n: number) => screen.getByText(`Reconnecting\u{2026} (${n} of 3)`);
+const again = () => screen.queryAllByRole("button", { name: "Join again" });
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("the Cast watcher page", () => {
   it("shows LIVE and the stage while a track is on air", async () => {
@@ -62,13 +78,13 @@ describe("the Cast watcher page", () => {
     expect(people()).toBe("");
   });
 
-  it("names a join that failed, and Retry joins again", async () => {
+  it("names a join that failed on the end card, and Join again joins", async () => {
     const join = vi
       .fn<WatchLive["join"]>(async () => ({ roomId: "room-1" }))
       .mockRejectedValueOnce(new Error("The Cast server did not answer in time"));
     await joined({ join });
-    expect(await screen.findByText("The Cast server did not answer in time")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect((await screen.findByRole("alertdialog")).textContent).toContain("The Cast server did not answer in time");
+    fireEvent.click(again()[0]!);
     expect(await screen.findByText("LIVE")).toBeTruthy();
     expect(join).toHaveBeenCalledTimes(2);
   });
@@ -81,13 +97,100 @@ describe("the Cast watcher page", () => {
     expect(container.querySelector(".cast-watch")?.getAttribute("data-state")).toBe("reconnecting");
   });
 
-  it("joins again by itself when the room is lost", async () => {
-    let lost = () => {};
+  it("shows the stage with no LIVE and no notice while the picture of the Cast has not arrived", async () => {
+    const container = await joined({ signal: "arriving" });
+    await screen.findByRole("button", { name: "Leave" });
+    expect(screen.queryByText("LIVE")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.querySelector("video")).not.toBeNull();
+  });
+
+  it("says in words, without LIVE, that this browser cannot play the video of the Cast", async () => {
+    await joined({ signal: "undecodable" });
+    const notice = (await screen.findByRole("status")).textContent;
+    expect(notice).toContain("This browser cannot play the video of this Cast yet");
+    expect(notice).toContain("another browser");
+    expect(screen.queryByText("LIVE")).toBeNull();
+    expect(screen.getByRole("button", { name: "Leave" })).toBeTruthy();
+  });
+
+  it("joins again by itself after a lost connection, three times with longer waits, then says so on the end card", async () => {
+    const join = vi.fn<WatchLive["join"]>(async () => Promise.reject(new Error("offline"))).mockResolvedValueOnce({ roomId: "room-1" });
+    const lose = await watching({ join });
+    lose("network");
+    for (const [n, ms] of [[1, 2_000], [2, 5_000], [3, 10_000]] as const) {
+      expect(tries(n)).toBeTruthy();
+      expect(screen.queryByText("LIVE")).toBeNull();
+      await pass(ms - 1);
+      expect(join).toHaveBeenCalledTimes(n);
+      await pass(1);
+      expect(join).toHaveBeenCalledTimes(n + 1);
+      expect(join).toHaveBeenLastCalledWith(true);
+    }
+    const card = screen.getByRole("alertdialog", { name: "The connection was lost" });
+    expect(document.activeElement).toBe(card);
+    await pass(60_000);
+    expect(join).toHaveBeenCalledTimes(4);
+    fireEvent.click(again()[0]!);
+    expect(join).toHaveBeenCalledTimes(5);
+    expect(join).toHaveBeenLastCalledWith(false);
+  });
+
+  it("leaves from the reconnecting view to the lobby, and no join follows", async () => {
     const join = vi.fn<WatchLive["join"]>(async () => ({ roomId: "room-1" }));
-    await joined({ join, bindLost: (onLost) => ((lost = onLost), () => {}) });
-    await screen.findByText("LIVE");
-    act(() => lost());
-    await waitFor(() => expect(join).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText("LIVE")).toBeTruthy();
+    const leave = vi.fn();
+    const lose = await watching({ join, leave });
+    lose("network");
+    fireEvent.click(screen.getByRole("button", { name: "Leave" }));
+    expect(screen.getByRole("button", { name: "JOIN NOW" })).toBeTruthy();
+    expect(leave).toHaveBeenCalledTimes(1);
+    await pass(60_000);
+    expect(join).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { signal: "live", second: 1 },
+    { signal: "none", second: 2 },
+  ] as const)("counts the next loss as try $second after a try that joined with the Cast $signal", async ({ signal, second }) => {
+    const lose = await watching({ signal });
+    lose("network");
+    expect(tries(1)).toBeTruthy();
+    await pass(2_000);
+    expect(screen.getByRole("button", { name: "Leave" })).toBeTruthy();
+    lose("network");
+    expect(tries(second)).toBeTruthy();
+  });
+
+  it("shows try 1 of a room that is lost in the commit that shows the Cast, before the page's effects run", async () => {
+    let lost = (_why: WatchLoss) => {};
+    let drop = true;
+    const stage = () => <video ref={(el) => void (el && drop && ((drop = false), lost("network")))} />;
+    await joined({ stage, bindLost: (onLost) => ((lost = onLost), () => {}) });
+    expect(await screen.findByText("Reconnecting\u{2026} (1 of 3)")).toBeTruthy();
+    expect(screen.getByText("Reconnecting\u{2026} (1 of 3)").closest(".cast-watch")?.getAttribute("data-state")).toBe("reconnecting");
+  });
+
+  it("shows the end card and does not join again by itself when the server removed the watcher", async () => {
+    const join = vi.fn<WatchLive["join"]>(async () => ({ roomId: "room-1" }));
+    const lose = await watching({ join });
+    lose("removed");
+    const card = screen.getByRole("alertdialog", { name: "You were removed from this Cast" });
+    expect(document.activeElement).toBe(card);
+    expect(screen.queryByText("LIVE")).toBeNull();
+    expect(again()).toHaveLength(1);
+    await pass(60_000);
+    expect(join).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends the tries with the end card, and no Join again for a ban, when a new join is refused", async () => {
+    const refused = { kind: "error", title: "You cannot join this Cast", message: "You are banned from this scene", again: false } as const;
+    const join = vi.fn<WatchLive["join"]>(async () => ({ refused })).mockResolvedValueOnce({ roomId: "room-1" });
+    const lose = await watching({ join });
+    lose("network");
+    await pass(2_000);
+    expect(screen.getByRole("alertdialog", { name: refused.title }).textContent).toContain(refused.message);
+    expect(again()).toHaveLength(0);
+    await pass(60_000);
+    expect(join).toHaveBeenCalledTimes(2);
   });
 });

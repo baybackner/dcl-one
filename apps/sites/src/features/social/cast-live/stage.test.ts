@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isCastPublisher, isPerson, pickWatcherStage, stalledCast, streamerStage, type StageCandidate } from "./stage";
+import { isCastPublisher, isPerson, stalledCast, streamerStage, watcherStage, type StageCandidate } from "./stage";
 
 const t = (identity: string, source: StageCandidate["source"], extra: Partial<StageCandidate> = {}) => ({
   identity,
@@ -8,10 +8,13 @@ const t = (identity: string, source: StageCandidate["source"], extra: Partial<St
   muted: false,
   local: false,
   stalled: false,
+  picture: true,
+  key: `${identity}/${source}`,
   ...extra,
 });
+const pickWatcherStage = (tracks: Parameters<typeof watcherStage>[0]) => watcherStage(tracks, null).shown;
 
-describe("pickWatcherStage", () => {
+describe("watcherStage", () => {
   it("prefers a Cast screen share, then any screen share, then a Cast camera, then any camera", () => {
     const wallet = "0xabc";
     const streamer = "stream:place-1:uuid";
@@ -24,10 +27,28 @@ describe("pickWatcherStage", () => {
     expect(pickWatcherStage([t(wallet, "camera")])?.identity).toBe(wallet);
   });
 
-  it("shows a track that advances before a stalled one, and a stalled one when nothing else is there", () => {
-    const slide = t("presentation-bot:room:uuid", "screen_share", { stalled: true });
-    expect(pickWatcherStage([slide, t("stream:place-1:uuid", "camera")])?.source).toBe("camera");
-    expect(pickWatcherStage([slide])).toBe(slide);
+  it("keeps a screen share on the stage while it is published, stalled or not", () => {
+    const camera = t("stream:place-1:uuid", "camera");
+    const share = t("stream:place-1:uuid", "screen_share", { stalled: true });
+    expect(watcherStage([camera, share], share.key)).toEqual({ shown: share, next: null });
+    expect(watcherStage([camera, { ...share, muted: true }], share.key)).toEqual({ shown: camera, next: null });
+    expect(watcherStage([camera], share.key)).toEqual({ shown: camera, next: null });
+  });
+
+  it("gives the stage to a track of a better rank only with its first picture, and never to one of the same or a lower rank", () => {
+    const camera = t("stream:place-1:uuid", "camera");
+    const share = t("stream:place-1:uuid", "screen_share", { picture: false });
+    expect(watcherStage([camera, share], camera.key)).toEqual({ shown: camera, next: share });
+    const drawn = { ...share, picture: true };
+    expect(watcherStage([camera, drawn], camera.key)).toEqual({ shown: drawn, next: null });
+    expect(watcherStage([camera, drawn], drawn.key)).toEqual({ shown: drawn, next: null });
+    const other = t("stream:place-2:uuid", "camera");
+    expect(watcherStage([camera, other], other.key)).toEqual({ shown: other, next: null });
+  });
+
+  it("shows the best track, with or without a picture, when the stage has no owner", () => {
+    const share = t("stream:place-1:uuid", "screen_share", { picture: false });
+    expect(watcherStage([t("stream:place-1:uuid", "camera"), share], null)).toEqual({ shown: share, next: null });
   });
 
   it("never shows a muted track, audio, or nothing at all", () => {
@@ -83,18 +104,19 @@ describe("stalledCast", () => {
   const streamer = "stream:place-1:uuid";
   const frozen = { stalled: true };
 
-  it("is true when the picture a watcher is shown does not advance, whatever the sound does", () => {
-    expect(stalledCast([t(streamer, "camera", frozen), t(streamer, "microphone")])).toBe(true);
-    expect(stalledCast([t(streamer, "camera"), t(streamer, "microphone", frozen)])).toBe(false);
+  it("is true when the picture on the stage does not advance, whatever the sound and the other pictures do", () => {
+    const camera = t(streamer, "camera");
+    expect(stalledCast([camera, t(streamer, "microphone")], { ...camera, ...frozen })).toBe(true);
+    expect(stalledCast([t(streamer, "screen_share", frozen), t(streamer, "microphone", frozen)], camera)).toBe(false);
   });
 
   it("with no picture, is true when no sound advances", () => {
-    expect(stalledCast([t(streamer, "microphone", frozen)])).toBe(true);
-    expect(stalledCast([t(streamer, "microphone", frozen), t("0x1", "microphone")])).toBe(false);
+    expect(stalledCast([t(streamer, "microphone", frozen)], null)).toBe(true);
+    expect(stalledCast([t(streamer, "microphone", frozen), t("0x1", "microphone")], null)).toBe(false);
   });
 
   it("is false with nothing on air, and never reads the page's own tracks", () => {
-    expect(stalledCast([])).toBe(false);
-    expect(stalledCast([t(streamer, "camera", { local: true, stalled: true })])).toBe(false);
+    expect(stalledCast([], null)).toBe(false);
+    expect(stalledCast([t(streamer, "camera", { local: true, stalled: true })], null)).toBe(false);
   });
 });
