@@ -96,15 +96,10 @@ impl Plugin for AutomationPlugin {
                 PreUpdate,
                 input::play_input_script.before(bevy::input::InputSystem),
             );
-        app.add_plugins((
-            gesture::AutomationGesturePlugin,
-            pointer::AutomationPointerPlugin,
-            walk::AutomationWalkPlugin,
-        ));
+        app.add_plugins((pointer::AutomationPointerPlugin, walk::AutomationWalkPlugin));
     }
 }
 
-pub(crate) mod gesture;
 pub(crate) mod pointer;
 pub(crate) mod walk;
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { ConsoleError, FakeConsole, commandOf, redactLine } from '../driver/console.ts'
-import { type CommandRecord, Explorer, parseLiveScenes, parsePortables, parseSmartWearables, type WorldState } from '../driver/explorer.ts'
+import { type CommandRecord, Explorer, parseLiveScenes, parsePortables, parseSmartWearables, type PlayerState, type WalkReport, type WorldState } from '../driver/explorer.ts'
 import { enterWorld } from '../driver/session.ts'
 
 function world(overrides: Partial<WorldState> = {}): string {
@@ -424,14 +424,45 @@ describe('Explorer', () => {
 
   test('hoverEntity, clickEntity, walk, playerState, raycast and scene log commands compose the lines', async () => {
     const report = JSON.stringify({ hit: null, entries: [], events: [], diagnosis: 'blocked by entity 9' })
-    const fake = new FakeConsole({ hover_entity: report, click_entity: report, walk: report, player_state: report, raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
+    const walked: WalkReport = {
+      startPosition: { x: 8, y: 0, z: 8 },
+      endPosition: { x: 8, y: 0, z: 12.5 },
+      distance: 4.5,
+      parcel: [0, 0],
+      seconds: 1.2,
+      kind: 'walk',
+      jump: false,
+      keys: ['ControlLeft', 'KeyW'],
+      modifierActive: true,
+      modifier: ['run', 'jump'],
+      ignoreInputModifiers: false,
+      settled: true
+    }
+    const pose: PlayerState = {
+      position: { x: 8, y: 0, z: 12.5 },
+      rotationEuler: { x: 0, y: 90, z: 0 },
+      parcel: [0, 0],
+      velocity: { x: 0, y: 0, z: 0 },
+      grounded: null,
+      outOfWorld: true,
+      camera: {
+        mode: 'third_person',
+        position: { x: 8, y: 2, z: 9 },
+        rotationEuler: { x: 15, y: 90, z: 0 },
+        fov: 60,
+        modeChangeAllowed: true,
+        pointerLocked: false
+      },
+      pointerLocked: false
+    }
+    const fake = new FakeConsole({ hover_entity: report, click_entity: report, walk: JSON.stringify(walked), player_state: JSON.stringify(pose), raycast_stats: JSON.stringify({ budgetMs: 1.67, ran: 1, deferred: 0, spentMs: 0.1, uncappedRan: 2, uncappedSpentMs: 0.2 }), raycast_budget: 'raycast budget: 0.00 ms (override)', scene_logs: '[1.00] Info: a\n[2.00] Info: b' })
     const explorer = new Explorer(fake)
     assert.equal((await explorer.hoverEntity(512, { bounds: true, frames: 10 })).diagnosis, 'blocked by entity 9')
     await explorer.clickEntity('512', { button: 'primary', event: 'down', timeoutFrames: 60 })
     await explorer.clearPointer()
-    await explorer.walk(0, 1, { seconds: 1.2, kind: 'walk' })
+    assert.deepEqual(await explorer.walk(0, 1, { seconds: 1.2, kind: 'walk' }), walked)
     await explorer.walk(-1, 0.5, { kind: 'run', jump: true, ignoreInputModifiers: true })
-    await explorer.playerState()
+    assert.deepEqual(await explorer.playerState(), pose)
     assert.equal((await explorer.raycastStats()).budgetMs, 1.67)
     assert.equal(await explorer.raycastBudget(0), 0)
     assert.deepEqual(await explorer.sceneLogs(50), ['[1.00] Info: a', '[2.00] Info: b'])

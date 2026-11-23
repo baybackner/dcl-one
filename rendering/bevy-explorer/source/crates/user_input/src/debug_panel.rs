@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 
 use crate::avatar_movement::{
     ActivePlayerComponent, AvatarLocomotionSettings, AvatarMovement, AvatarMovementInfo,
+    GROUNDED_METRES,
 };
 
 pub(super) struct InputDebugPanelPlugin;
@@ -101,11 +102,6 @@ fn lens(projection: &Projection) -> (Option<f32>, Option<f32>) {
     }
 }
 
-/// A velocity in Decentraland's axes, as the movement scene is told of it.
-fn dcl_velocity(velocity: &Vec3) -> Vector3 {
-    Vector3::world_vec_from_vec3(velocity)
-}
-
 fn camera_state(
     mut cmd: ConsoleCommand<CameraState>,
     camera: Query<(&PrimaryCamera, &Projection)>,
@@ -134,16 +130,15 @@ fn movement_state(
     let loc = active.single().ok().map(|active| &active.component.0);
     let player = player.single().ok();
     let vector = |v: Vector3| [v.x, v.y, v.z];
-    let requested = info
-        .0
-        .requested_velocity
-        .or_else(|| player.map(|(movement, _)| dcl_velocity(&movement.component.velocity)));
+    let requested = info.0.requested_velocity.or_else(|| {
+        player.map(|(movement, _)| Vector3::world_vec_from_vec3(&movement.component.velocity))
+    });
     // The controller skips the displacement solve when idle or movement is suppressed.
     // It explicitly sets its velocity to zero in that case, leaving SDK feedback absent.
     let actual = info.0.actual_velocity.or_else(|| {
         player
             .filter(|(_, dynamics)| dynamics.velocity == Vec3::ZERO)
-            .map(|(_, dynamics)| dcl_velocity(&dynamics.velocity))
+            .map(|(_, dynamics)| Vector3::world_vec_from_vec3(&dynamics.velocity))
     });
     let setting_reason = if loc.is_some() {
         "The active locomotion settings do not specify this value."
@@ -166,15 +161,12 @@ fn movement_state(
     }).to_string());
 }
 
-/// How far below the player's ground height counts as standing on it.
-const GROUNDED_METRES: f32 = 0.2;
-
 /// Read the player's and the camera's pose as JSON: position, rotationEuler, parcel, velocity,
-/// grounded, outOfWorld, pointerLocked and camera {mode, position, rotationEuler, fov,
-/// modeChangeAllowed, pointerLocked}. Positions and the velocity are in Decentraland world
-/// coordinates; euler angles are Decentraland's, in degrees from 0 to 360 (x the pitch, looking
-/// down positive; y the yaw clockwise from north; z the roll). /player_position, /camera_state
-/// and /movement_state read one part each
+/// grounded (null while out of the world), outOfWorld, pointerLocked and camera {mode, position,
+/// rotationEuler, fov, modeChangeAllowed, pointerLocked}. Positions and the velocity are in
+/// Decentraland world coordinates; euler angles are Decentraland's, in degrees from 0 to 360 (x
+/// the pitch, looking down positive; y the yaw clockwise from north; z the roll).
+/// /player_position, /camera_state and /movement_state read one part each
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/player_state")]
 struct PlayerState;
@@ -231,7 +223,7 @@ fn player_state(
     };
     let (_, rotation, position) = transform.to_scale_rotation_translation();
     let parcel = vec3_to_parcel(position);
-    let velocity = dcl_velocity(&dynamics.map_or(Vec3::ZERO, |d| d.velocity));
+    let velocity = Vector3::world_vec_from_vec3(&dynamics.map_or(Vec3::ZERO, |d| d.velocity));
     let pointer_locked = locks.0.contains("camera");
     let camera = camera
         .single()
@@ -253,7 +245,11 @@ fn player_state(
             "rotationEuler": dcl_euler(rotation),
             "parcel": [parcel.x, parcel.y],
             "velocity": reply::xyz([velocity.x, velocity.y, velocity.z]),
-            "grounded": dynamics.map(|d| d.ground_height < GROUNDED_METRES),
+            // the player is spawned with a ground height of 0, which says nothing until the
+            // movement controller has placed it in the world
+            "grounded": dynamics
+                .filter(|_| !out_of_world)
+                .map(|d| d.ground_height < GROUNDED_METRES),
             "outOfWorld": out_of_world,
             "camera": camera,
             "pointerLocked": pointer_locked,
@@ -344,5 +340,31 @@ mod tests {
         assert_eq!(report["outOfWorld"], false);
         assert!(report["camera"].is_null());
         assert_eq!(report["pointerLocked"], false);
+    }
+
+    #[test]
+    fn grounded_is_unknown_while_the_player_is_out_of_the_world() {
+        let mut app = App::new();
+        app.add_event::<ConsoleCommandEntered>()
+            .add_event::<PrintConsoleLine>()
+            .init_resource::<CursorLocks>()
+            .add_systems(Update, player_state);
+        app.world_mut().spawn((
+            PrimaryUser::default(),
+            GlobalTransform::IDENTITY,
+            AvatarDynamicState::default(),
+            OutOfWorld,
+        ));
+        let (tx, rx) = mpsc::channel();
+        app.world_mut().send_event(ConsoleCommandEntered {
+            command_name: "/player_state".into(),
+            args: vec![],
+            responder: Some(Arc::new(move |result| tx.send(result).unwrap())),
+        });
+        app.update();
+        let reply = rx.try_recv().unwrap().unwrap();
+        let report: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(report["grounded"].is_null());
+        assert_eq!(report["outOfWorld"], true);
     }
 }

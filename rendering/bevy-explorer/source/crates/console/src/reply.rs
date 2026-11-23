@@ -1,13 +1,8 @@
 //! What the automation commands' replies and arguments share
 //! (docs/adr/2026-11-17-console-command-conventions.md): the `screen` a coordinate is read
-//! against, normalized coordinates, points, the measured frame time a command counts seconds in,
-//! and refusals that name their cause.
+//! against, normalized coordinates, points and refusals that name their cause.
 
-use bevy::{
-    diagnostic::{Diagnostic, DiagnosticsStore, FrameTimeDiagnosticsPlugin},
-    prelude::*,
-    window::PrimaryWindow,
-};
+use bevy::{prelude::*, window::PrimaryWindow};
 use serde_json::{json, Value};
 
 /// The primary window in logical pixels, the space `/click_at`, `/entity_screen_position` and the
@@ -82,41 +77,6 @@ pub fn xyz([x, y, z]: [f32; 3]) -> Value {
     json!({ "x": round(x), "y": round(y), "z": round(z) })
 }
 
-/// How long a frame takes, as `FrameTimeDiagnosticsPlugin` smooths it, for a command that counts
-/// seconds in frames. A sixtieth of a second until a frame has been measured.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FrameRate {
-    /// seconds a frame takes
-    pub frame_seconds: f32,
-}
-
-impl Default for FrameRate {
-    fn default() -> Self {
-        Self {
-            frame_seconds: 1.0 / 60.0,
-        }
-    }
-}
-
-impl FrameRate {
-    pub fn measured(diagnostics: &DiagnosticsStore) -> Self {
-        diagnostics
-            .get(&FrameTimeDiagnosticsPlugin::FRAME_TIME)
-            .and_then(Diagnostic::smoothed)
-            .map(|milliseconds| (milliseconds / 1000.0) as f32)
-            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
-            .map_or_else(Self::default, |frame_seconds| Self { frame_seconds })
-    }
-
-    /// The frames `seconds` last, at least one for a positive duration.
-    pub fn frames_in(&self, seconds: f32) -> u32 {
-        if seconds <= 0.0 {
-            return 0;
-        }
-        (seconds / self.frame_seconds).round().max(1.0) as u32
-    }
-}
-
 /// A refusal: the command did nothing, and says why and what stood in the way. Sent as the failed
 /// reply's text, `{"refused": reason, "cause": {...}}`, the cause naming the input, holder or
 /// entity that refused.
@@ -140,21 +100,6 @@ mod tests {
         assert_eq!(
             xyz([1.006, -0.001, -2.5]).to_string(),
             r#"{"x":1.01,"y":0.0,"z":-2.5}"#
-        );
-    }
-
-    #[test]
-    fn seconds_count_in_frames_at_the_measured_rate() {
-        let rate = FrameRate {
-            frame_seconds: 1.0 / 30.0,
-        };
-        assert_eq!(rate.frames_in(2.0), 60);
-        assert_eq!(rate.frames_in(0.001), 1);
-        assert_eq!(rate.frames_in(0.0), 0);
-        // nothing measured yet: a sixtieth of a second
-        assert_eq!(
-            FrameRate::measured(&DiagnosticsStore::default()),
-            FrameRate::default()
         );
     }
 

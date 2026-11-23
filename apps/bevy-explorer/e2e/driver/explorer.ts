@@ -59,16 +59,20 @@ export interface PointerReport {
   diagnosis: string | null
 }
 
-/** What `/walk` reports once the player has settled. Positions are Decentraland world coordinates. */
+/** The gait `/walk` holds the keys for. */
+export type Gait = 'walk' | 'jog' | 'run'
+
+/** What `/walk` reports once the player has settled, or 3 s after the keys went up
+ *  (`settled: false`). Positions are Decentraland world coordinates. */
 export interface WalkReport {
-  startPosition: { x: number; y: number; z: number }
-  endPosition: { x: number; y: number; z: number }
+  startPosition: Position
+  endPosition: Position
   /** straight from the start to the end */
   distance: number
   parcel: [number, number]
   /** how long the keys were down */
   seconds: number
-  kind: 'walk' | 'jog' | 'run'
+  kind: Gait
   jump: boolean
   /** the keys held, by `KeyboardEvent.code` */
   keys: string[]
@@ -83,33 +87,30 @@ export interface WalkReport {
 
 /** Decentraland euler angles, in degrees from 0 to 360: `x` the pitch (looking down positive), `y`
  *  the yaw clockwise from north, `z` the roll. */
-export interface Euler {
-  x: number
-  y: number
-  z: number
-}
+export type Euler = Position
 
 /** What `/player_state` reports. Positions and velocity are Decentraland world coordinates. */
 export interface PlayerState {
-  position: { x: number; y: number; z: number }
+  position: Position
   rotationEuler: Euler
   parcel: [number, number]
-  velocity: { x: number; y: number; z: number }
-  /** null before the movement controller has run */
+  velocity: Position
+  /** within 0.2 m of the ground; null while the player is out of the world */
   grounded: boolean | null
   outOfWorld: boolean
   camera: {
     /** `cinematic` under a scene's camera, `free` in photo mode */
     mode: 'first_person' | 'third_person' | 'cinematic' | 'free'
-    position: { x: number; y: number; z: number }
+    position: Position
     rotationEuler: Euler
     /** vertical, in degrees */
     fov: number | null
     /** false while a scene holds the camera */
     modeChangeAllowed: boolean
+    /** the same lock as the player's `pointerLocked`, with the camera it steers */
     pointerLocked: boolean
   } | null
-  /** the scene's pointer lock */
+  /** the pointer is locked to the camera */
   pointerLocked: boolean
 }
 
@@ -1117,12 +1118,14 @@ export class Explorer {
   }
 
   /** Walks camera-relative by holding the movement keys: `dx` right (+) or left (-), `dy` forward (+)
-   *  or backward (-), each -1 to 1; resolves once the player has settled. A walk that cannot start
-   *  rejects with `{"refused", "cause"}` as the error's output. */
+   *  or backward (-), each -1 to 1. Resolves once the player has settled after the keys are up, or
+   *  3 s after with `settled: false`. A walk that cannot start rejects with `{"refused", "cause"}`
+   *  as the error's output. `ignoreInputModifiers` keeps a scene's `InputModifier` from stopping
+   *  the walk; the engine accepts it in preview only and refuses the walk otherwise. */
   walk(
     dx: number,
     dy: number,
-    options: { seconds?: number; kind?: 'walk' | 'jog' | 'run'; jump?: boolean; ignoreInputModifiers?: boolean } = {}
+    options: { seconds?: number; kind?: Gait; jump?: boolean; ignoreInputModifiers?: boolean } = {}
   ): Promise<WalkReport> {
     let line = `/walk ${dx} ${dy}`
     if (options.seconds !== undefined) line += ` --seconds ${options.seconds}`

@@ -143,9 +143,10 @@ fn update_locomotion_speeds(
     }
 }
 
-/// While set, the movement scene is not told of the active `InputModifier`, so the player moves as
-/// if no scene restricted it (`/walk --ignore-input-modifiers`). The modifier stays active for
-/// everything else that reads it.
+/// While set, the active `InputModifier` is left out of the avatar movement info, which every
+/// scene that reads that info gets (the movement scene among them), so the player moves as if no
+/// scene restricted it. `/walk --ignore-input-modifiers` sets it for the walk, in preview only.
+/// The component stays on the player for whatever else reads it.
 #[derive(Resource, Default)]
 pub struct InputModifierBypass(pub bool);
 
@@ -750,11 +751,14 @@ pub fn apply_movement(
     end_jump_on_landing(&mut dynamic_state);
 }
 
+/// How far above the ground the player may be and count as standing on it.
+pub const GROUNDED_METRES: f32 = 0.2;
+
 /// Forget the take-off time once the player is back on the ground and no longer rising, so that
 /// `jump_time` marks a jump in flight (`<= 0.0` for none): the animation's take-off window and the
 /// `jump_count` this client broadcasts both read it.
 fn end_jump_on_landing(dynamic_state: &mut AvatarDynamicState) {
-    if dynamic_state.ground_height < 0.2 && dynamic_state.velocity.y <= 0.0 {
+    if dynamic_state.ground_height < GROUNDED_METRES && dynamic_state.velocity.y <= 0.0 {
         dynamic_state.jump_time = -1.0;
     }
 }

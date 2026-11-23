@@ -39,14 +39,18 @@ its first command.
    screenshot's pixels are `scale` times as many. The pixel commands (`/click_at`,
    `/entity_screen_position`) take logical pixels; `/click_at --normalized` takes the normalized
    form.
-3. **Durations.** A command that lasts takes `--seconds <f32>`. Where it counts frames, seconds
-   count at the frame time `FrameTimeDiagnosticsPlugin` smooths (`reply::FrameRate`).
+3. **Durations.** A new command that lasts takes `--seconds <f32>` and measures it on the engine's
+   clock (`Time`), so it lasts the same at any frame rate (`/walk`). `/hover_entity` and
+   `/click_entity` count frames (`--frames`, `--timeout-frames`) and keep doing so.
 4. **Waiting.** A command waits for its effect inside the command, for a bounded time, and replies
-   with what it observed; a reply that ran out of time says so (`/walk` answers `settled: false`).
-5. **Refusals.** A command that does nothing fails with `{"refused": "<reason>", "cause": {...}}`
-   (`reply::refusal`), the cause naming what stood in the way, and it refuses before it acts. A
-   command that runs over several frames refuses a second call while it runs, naming itself as
-   `cause.holder` (`GestureArbiter`, `src/automation/gesture.rs`), instead of queueing it.
+   with what it observed; a reply that ran out of time says so (`/walk` answers `settled: false`,
+   the pointer commands a `diagnosis`).
+5. **Refusals.** A new command that does nothing fails with
+   `{"refused": "<reason>", "cause": {...}}` (`reply::refusal`), the cause naming what stood in the
+   way, and it refuses before it acts. One that runs over several frames refuses a second call
+   while it runs, naming itself as `cause.holder`, instead of queueing it. `/walk` does both. The
+   pointer commands refuse in the same cases with a sentence, and move to this form when their
+   replies next change.
 
 ## Consequences
 
@@ -62,8 +66,9 @@ its first command.
   own commands (`/goto`, `/world`, `/help`, bare `/reload`) and refuses the ones it hides.
 - `/click_at` replies JSON: `x`, `y`, `normalized`, `button`, `screen` and, on the web, `input`.
 - A value holding a lone `"` is quoted or escaped on non-JSON commands.
-- A caller tells a refusal from a bad argument by the failed reply's text: a refusal is JSON with
-  `refused`, an argument error a sentence.
+- A caller tells a `/walk` refusal from a bad argument by the failed reply's text: the refusal is
+  JSON with `refused`, the argument error a sentence. A failed `/hover_entity` or `/click_entity`
+  is a sentence in both cases.
 
 ## Alternatives considered
 

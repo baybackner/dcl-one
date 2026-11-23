@@ -350,7 +350,8 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   [--ignore-input-modifiers]` holds the movement keys camera-relative, with the walk or run key
   for the gait, and answers once the player has settled with `startPosition`, `endPosition`,
   `distance`, `parcel`, the held `seconds` and whether an `InputModifier` was active
-  (`modifierActive`, `modifier`); a walk that cannot start is refused with `{"refused", "cause"}`.
+  (`modifierActive`, `modifier`); a walk that cannot start is refused with `{"refused", "cause"}`,
+  as is `--ignore-input-modifiers` outside preview.
   `/player_state` reads the player's pose, `parcel`, velocity, `grounded`, the camera's mode and
   pose, `modeChangeAllowed` and `pointerLocked` in one reply. `/gesture_state` reads the running
   gestures, for the debug panel. `docs/guidelines/running.md` has the details.
