@@ -1,4 +1,5 @@
-//! What a scene entity shows, in a few words read from the scene's own state: `gltf <src>`,
+//! What a scene entity shows, in a few words read from the scene's own state: `gltf <src>` (the
+//! last 64 characters of a longer one, which hold the file name),
 //! `mesh <Box|Sphere|Cylinder|Plane|Gltf>`, `text "<first 24 characters>"`, `hidden`,
 //! `parent <id>`, joined by `, `; the reserved entities are `scene root`, `player` and `camera`.
 //! `/scene_entities --labels` and `/visible_entities` label with it.
@@ -13,6 +14,7 @@ use dcl_component::{
 use dcl_types::interface::CrdtStore;
 
 const MAX_TEXT_CHARS: usize = 24;
+const MAX_SRC_CHARS: usize = 64;
 
 /// The entity's current value of a component, if the scene has put one on it.
 fn read<T: FromDclReader>(
@@ -51,7 +53,14 @@ pub(crate) fn label(crdt: &CrdtStore, entity: SceneEntityId) -> Option<String> {
     }
     let mut parts = Vec::new();
     if let Some(gltf) = read::<PbGltfContainer>(crdt, SceneComponentId::GLTF_CONTAINER, entity) {
-        parts.push(format!("gltf {}", gltf.src));
+        let length = gltf.src.chars().count();
+        if length > MAX_SRC_CHARS {
+            // the file name is at the end
+            let tail: String = gltf.src.chars().skip(length - MAX_SRC_CHARS).collect();
+            parts.push(format!("gltf …{tail}"));
+        } else {
+            parts.push(format!("gltf {}", gltf.src));
+        }
     }
     if let Some(mesh) = read::<PbMeshRenderer>(crdt, SceneComponentId::MESH_RENDERER, entity) {
         let case = match mesh.mesh {
@@ -165,6 +174,43 @@ mod tests {
         assert_eq!(
             label(&crdt, SceneEntityId::ROOT).as_deref(),
             Some("scene root")
+        );
+    }
+
+    #[test]
+    fn a_long_gltf_src_keeps_its_end() {
+        let entity = SceneEntityId::from_proto_u32(600);
+        let mut crdt = CrdtStore::default();
+        put(
+            &mut crdt,
+            SceneComponentId::GLTF_CONTAINER,
+            entity,
+            &PbGltfContainer {
+                src: "models/tree.glb".to_owned(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            label(&crdt, entity).as_deref(),
+            Some("gltf models/tree.glb")
+        );
+
+        let src = format!("{}/tree.glb", "é".repeat(100));
+        put(
+            &mut crdt,
+            SceneComponentId::GLTF_CONTAINER,
+            entity,
+            &PbGltfContainer {
+                src,
+                ..Default::default()
+            },
+        );
+        let label = label(&crdt, entity).unwrap();
+        assert!(label.starts_with("gltf …é"), "{label}");
+        assert!(label.ends_with("é/tree.glb"), "{label}");
+        assert_eq!(
+            label.chars().count(),
+            "gltf …".chars().count() + MAX_SRC_CHARS
         );
     }
 }

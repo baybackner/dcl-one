@@ -213,26 +213,22 @@ fn visible_entities_cmd(
 
 /// The entities of the scene that draw a primitive mesh or a glTF.
 fn ctx_candidates(crdt: &dcl_types::interface::CrdtStore) -> usize {
-    let mut entities = std::collections::HashSet::new();
-    for component in [
+    [
         dcl_component::SceneComponentId::MESH_RENDERER,
         dcl_component::SceneComponentId::GLTF_CONTAINER,
-    ] {
-        if let Some(state) = crdt.lww.get(&component) {
-            entities.extend(
-                state
-                    .last_write
-                    .iter()
-                    .filter(|(_, entry)| entry.is_some)
-                    .map(|(entity, _)| *entity),
-            );
-        }
-    }
-    entities.len()
+    ]
+    .iter()
+    .filter_map(|component| crdt.lww.get(component))
+    .flat_map(|state| state.last_write.keys().copied())
+    .filter(|entity| labels::renders(crdt, *entity))
+    .collect::<std::collections::HashSet<_>>()
+    .len()
 }
 
 /// The visible meshes of `target` and of its descendants that are not themselves scene entities
-/// (a child entity is listed on its own), each with where it is placed.
+/// (a child entity is listed on its own), each with where it is placed. The bounds anchor of
+/// `/entity_screen_position --bounds` and the entity pointer commands walks child entities too, so
+/// a parent's rect here can be smaller than the box those aim at the centre of.
 fn own_meshes(
     target: Entity,
     meshes: &Query<(&Aabb, &GlobalTransform, &InheritedVisibility)>,

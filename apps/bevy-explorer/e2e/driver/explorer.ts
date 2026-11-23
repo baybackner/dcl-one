@@ -1,7 +1,7 @@
 // The typed API specs use. Every method is one console command (or a command and the wait that
 // makes its effect observable), with the reply parsed as rendering/bevy-explorer/docs/guidelines/
 // running.md ("Test commands") describes it. Specs never see which transport carries the line.
-import { type Console, ConsoleError, redact, redactLine, replaceSecrets, secretsOf } from './console.ts'
+import { CONSOLE_SPACE, type Console, ConsoleError, redact, redactLine, replaceSecrets, secretsOf } from './console.ts'
 import { type AuthIdentity, encodeIdentity } from './identity.ts'
 import { type Selector, describeSelector, selectorArg, toSelectorObject } from './selectors.ts'
 import { sleep, until } from './wait.ts'
@@ -130,7 +130,7 @@ export interface VisibleEntities {
 /** A word of a console line, double-quoted when it holds whitespace or a quote (the conventions
  *  ADR's quoting rule). */
 export function quoteWord(word: string): string {
-  return word === '' || /[\s"]/.test(word) ? `"${word.replace(/[\\"]/g, '\\$&')}"` : word
+  return word === '' || word.includes('"') || CONSOLE_SPACE.test(word) ? `"${word.replace(/[\\"]/g, '\\$&')}"` : word
 }
 
 /** `/raycast_stats`: the capped tier's budget and last pass, and the uncapped tier's last pass. */
@@ -1053,9 +1053,9 @@ export class Explorer {
   }
 
   /** The target scene's entities with what each shows, the first `limit` by id (200 unless given);
-   *  `name` keeps the labels holding it, any case. */
+   *  `name` keeps the labels holding it, any case. A long glTF `src` shows its end. */
   async sceneEntityLabels(options: { component?: string; name?: string; limit?: number } = {}): Promise<LabelledEntities> {
-    const flags = `${options.component ? ` ${options.component}` : ''}${options.name === undefined ? ' --labels' : ` --name ${quoteWord(options.name)}`}${options.limit === undefined ? '' : ` --limit ${options.limit}`}`
+    const flags = `${options.component ? ` ${quoteWord(options.component)}` : ''}${options.name === undefined ? ' --labels' : ` --name ${quoteWord(options.name)}`}${options.limit === undefined ? '' : ` --limit ${options.limit}`}`
     return this.json<LabelledEntities>(`/scene_entities${flags}`)
   }
 

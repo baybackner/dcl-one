@@ -349,9 +349,9 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
 - What is in frame: `/visible_entities [--limit N] [--min-coverage F]` lists the scene's mesh and
   glTF entities whose bounds meet the camera's view, largest first, with `screenRect`, a
   normalized `center`, `coverage`, distances and `screen` (frustum and bounds only: occlusion is
-  not evaluated). `/scene_entities --labels` and `--name <text>` reply JSON with what each entity
-  shows: `gltf <src>`, `mesh Box`, `text "<excerpt>"`, `hidden`, `parent <id>`, the first 200 by
-  id unless `--limit` says otherwise. `/get_reticle` says what the pointer ray reaches now
+  not evaluated). `/scene_entities --labels`, `--name <text>` and `--limit N` reply JSON with what
+  each entity shows: `gltf <src>` (the end of a long one), `mesh Box`, `text "<excerpt>"`,
+  `hidden`, `parent <id>`, the first 200 by id unless `--limit` says otherwise. `/get_reticle` says what the pointer ray reaches now
   (`kind`, `crdtEntityId`, `hitPoint`, `withinRange`, `hoverText`) and through which cursor
   (`cursorLocked`, `rayFromScreenCenter`, `cursor` with `screen`).
 - Raycasts: `/raycast_stats` (the capped tier's `budgetMs`, `ran`, `deferred`, `spentMs` and the

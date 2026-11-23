@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { ConsoleError, FakeConsole, commandOf, redactLine } from '../driver/console.ts'
-import { type CommandRecord, Explorer, parseLiveScenes, parsePortables, parseSmartWearables, type WorldState } from '../driver/explorer.ts'
+import { type CommandRecord, Explorer, quoteWord, parseLiveScenes, parsePortables, parseSmartWearables, type WorldState } from '../driver/explorer.ts'
 import { enterWorld } from '../driver/session.ts'
 
 function world(overrides: Partial<WorldState> = {}): string {
@@ -141,6 +141,16 @@ describe('Explorer', () => {
     await explorer.visibleEntities({ limit: 10, minCoverage: 0.01 })
     assert.equal((await explorer.getReticle()).kind, 'nothing')
     assert.deepEqual(fake.lines, ['/scene_entities --name "mesh box"', '/scene_entities MeshRenderer --labels --limit 50', '/visible_entities --limit 10 --min-coverage 0.01', '/get_reticle'])
+  })
+
+  test('quoteWord quotes what the engine would split or unquote, and escapes inside the quotes', () => {
+    assert.equal(quoteWord('tree.glb'), 'tree.glb')
+    assert.equal(quoteWord(''), '""')
+    assert.equal(quoteWord('mesh box'), '"mesh box"')
+    assert.equal(quoteWord('a\u0085b'), '"a\u0085b"')
+    assert.equal(quoteWord('say "hi"'), '"say \\"hi\\""')
+    assert.equal(quoteWord('a\\ b'), '"a\\\\ b"')
+    assert.equal(quoteWord('a\\b'), 'a\\b')
   })
 
   test('the voice chat actions compose their lines', async () => {

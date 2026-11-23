@@ -330,14 +330,16 @@ State, in every build:
   picked, else the player's; the entity is as `/scene_entities` lists it. `--bounds` aims at the
   centre of its visible meshes instead of its origin.
 - `/scene_entities [component] [--labels] [--name <text>] [--limit N]`: the live entities of the
-  scene, one per line. With `--labels`, or `--name` (alias `--filter`), JSON: `scene`, `total`,
+  scene, one per line. With `--labels`, `--name` (alias `--filter`) or `--limit`, JSON: `scene`, `total`,
   `matched`, `returned`, `truncated`, and `entities` by id, the first `--limit` of those matched
   (default 200, at most 2000), each `crdtEntityId` and `label`, what it shows from the
-  scene's own state: `gltf <src>`, `mesh <Box|Sphere|Cylinder|Plane|Gltf>`, `text "<first 24
+  scene's own state: `gltf <src>` (a `src` past 64 characters shows `…` and its last 64, which
+  hold the file name), `mesh <Box|Sphere|Cylinder|Plane|Gltf>`, `text "<first 24
   characters>…"`, `hidden` (a `VisibilityComponent` set to false), `parent <id>` (a parent other
   than the root), joined by `, `; `scene root`, `player`, `camera` for the reserved ids; `null`
   when nothing describes it. `--name` keeps the labels holding the text, any case (`mesh box`,
-  `hidden`, `gltf models/`).
+  `hidden`, `gltf models/`) and is matched against the label as shown, so a long `src` is found
+  by its end. Without `--name` only the listed entities are read.
 - `/visible_entities [--limit N] [--min-coverage F]`: JSON of the scene's entities that draw a
   primitive mesh or a glTF (signs and boards, bare `TextShape`s, are not listed) whose meshes'
   world bounds meet the primary camera's frustum, sorted by `coverage`, largest first (default
@@ -346,7 +348,10 @@ State, in every build:
   near plane projected, clamped to the view, as the camera reel frames a person; `null` when
   nothing of it lands there), `center`
   (normalized), `coverage` (share of the view), `distance` (player to the box's centre),
-  `distanceToCamera`, `renderers` (meshes merged; a child entity's meshes count for the child).
+  `distanceToCamera`, `renderers` (meshes merged; a child entity's meshes count for the child, so a parent's
+  `screenRect` leaves its child entities out, while the `--bounds` anchor of
+  `/entity_screen_position`, `/hover_entity` and `/click_entity` wraps them too and can aim
+  outside the parent's rect).
   With `scene`, `screen`, `cameraPosition` (Decentraland coordinates), `candidates` (entities
   that draw), `inFrustum`, `returned`, `truncated` and `occlusion`: it is not evaluated, so an
   entity behind a wall is still listed; a screenshot shows what is visible.

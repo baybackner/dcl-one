@@ -216,8 +216,8 @@ fn scene_logs_cmd(
 
 // --- /scene_entities ---
 
-/// List live entities in the active scene, optionally filtered by component name. With `--labels`
-/// or `--name` the reply is JSON: `scene`, `total`, `matched`, `returned`, `truncated`, and
+/// List live entities in the active scene, optionally filtered by component name. With `--labels`,
+/// `--name` or `--limit` the reply is JSON: `scene`, `total`, `matched`, `returned`, `truncated`, and
 /// `entities` (`crdtEntityId`, `label`: `gltf <src>`, `mesh <Box|Sphere|...>`, `text "<excerpt>"`,
 /// `hidden`, `parent <id>`, or null), by id, the first `--limit` of them.
 #[derive(clap::Parser, ConsoleCommand)]
@@ -234,7 +234,7 @@ struct SceneEntitiesCommand {
     /// Keep the entities whose label holds this text, any case (implies --labels)
     #[arg(long, alias = "filter")]
     name: Option<String>,
-    /// Most labelled entities to list, lowest id first (1 to 2000, default 200)
+    /// Most labelled entities to list, lowest id first (1 to 2000, default 200; implies --labels)
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=2000))]
     limit: Option<u32>,
 }
@@ -301,7 +301,7 @@ fn scene_entities_cmd(
                 .into_iter()
                 .collect();
 
-            let result = if cmd.labels || cmd.name.is_some() {
+            let result = if cmd.labels || cmd.name.is_some() || cmd.limit.is_some() {
                 Ok(labelled_entities(
                     crdt,
                     entities,
@@ -632,7 +632,8 @@ fn print_tree(
 // --- helpers ---
 
 /// The `--labels` reply: the entities with their labels, by id, those matching `name` only, the
-/// first `limit` of them; `matched` counts them all.
+/// first `limit` of them; `matched` counts them all. Without `name` only the listed ones are
+/// labelled.
 fn labelled_entities(
     crdt: &CrdtStore,
     mut entities: Vec<SceneEntityId>,
@@ -642,22 +643,29 @@ fn labelled_entities(
 ) -> String {
     entities.sort_by_key(|e| e.as_proto_u32().unwrap_or(e.id as u32));
     let total = entities.len();
-    let needle = name.map(str::to_lowercase);
-    let matching: Vec<_> = entities
+    let labelled = |entity: SceneEntityId| (entity, crate::labels::label(crdt, entity));
+    let (matched, listed): (usize, Vec<_>) = match name.map(str::to_lowercase) {
+        None => (
+            total,
+            entities.into_iter().take(limit).map(labelled).collect(),
+        ),
+        Some(needle) => {
+            let mut matching: Vec<_> = entities
+                .into_iter()
+                .map(labelled)
+                .filter(|(_, label)| {
+                    label
+                        .as_ref()
+                        .is_some_and(|label| label.to_lowercase().contains(&needle))
+                })
+                .collect();
+            let matched = matching.len();
+            matching.truncate(limit);
+            (matched, matching)
+        }
+    };
+    let listed: Vec<_> = listed
         .into_iter()
-        .map(|entity| (entity, crate::labels::label(crdt, entity)))
-        .filter(|(_, label)| {
-            needle.as_ref().is_none_or(|needle| {
-                label
-                    .as_ref()
-                    .is_some_and(|label| label.to_lowercase().contains(needle))
-            })
-        })
-        .collect();
-    let matched = matching.len();
-    let listed: Vec<_> = matching
-        .into_iter()
-        .take(limit)
         .map(|(entity, label)| {
             serde_json::json!({
                 "crdtEntityId": entity.as_proto_u32().unwrap_or(entity.id as u32),
@@ -1073,6 +1081,40 @@ mod tests {
         CrdtType, DclReader,
     };
     use prost::Message;
+
+    #[test]
+    fn the_label_list_counts_every_match_and_lists_the_first_of_them() {
+        let crdt = CrdtStore::default();
+        let entities: Vec<_> = [514, 0, 512, 513]
+            .into_iter()
+            .map(SceneEntityId::from_proto_u32)
+            .collect();
+        let reply = |name, limit| -> serde_json::Value {
+            serde_json::from_str(&labelled_entities(
+                &crdt,
+                entities.clone(),
+                name,
+                limit,
+                "h",
+            ))
+            .unwrap()
+        };
+
+        let listed = reply(None, 2);
+        assert_eq!(listed["total"], 4);
+        assert_eq!(listed["matched"], 4);
+        assert_eq!(listed["returned"], 2);
+        assert_eq!(listed["truncated"], true);
+        assert_eq!(listed["entities"][0]["label"], "scene root");
+        assert_eq!(listed["entities"][1]["crdtEntityId"], 512);
+        assert!(listed["entities"][1]["label"].is_null());
+
+        let named = reply(Some("ROOT"), 2);
+        assert_eq!(named["total"], 4);
+        assert_eq!(named["matched"], 1);
+        assert_eq!(named["returned"], 1);
+        assert_eq!(named["truncated"], false);
+    }
 
     #[test]
     fn grow_only_components_keep_their_name_in_the_snapshot() {
