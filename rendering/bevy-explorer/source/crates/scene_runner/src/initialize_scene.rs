@@ -6,6 +6,7 @@ use analytics::segment_system::SegmentConfig;
 use bevy::{
     asset::{io::Reader, AssetLoader, LoadContext},
     diagnostic::FrameCount,
+    ecs::{schedule::ScheduleConfigs, system::ScheduleSystem},
     math::{FloatOrd, Vec3Swizzles},
     platform::collections::{HashMap, HashSet},
     prelude::*,
@@ -111,17 +112,19 @@ impl Plugin for SceneLifecyclePlugin {
                 .in_set(SceneSets::Init),
         );
 
-        app.add_systems(
-            PostUpdate,
-            (
-                process_realm_change,
-                load_active_entities.run_if(not(resource_exists::<WorldHold>)),
-                process_scene_lifecycle,
-            )
-                .chain()
-                .in_set(RealmLifecycle),
-        );
+        app.add_systems(PostUpdate, realm_lifecycle_systems().in_set(RealmLifecycle));
     }
+}
+
+/// The realm lifecycle, in the order the plugin runs it.
+fn realm_lifecycle_systems() -> ScheduleConfigs<ScheduleSystem> {
+    (
+        process_realm_change,
+        load_active_entities.run_if(not(resource_exists::<WorldHold>)),
+        process_scene_lifecycle,
+    )
+        .chain()
+        .into_configs()
 }
 
 #[derive(Component, Debug)]
@@ -1277,6 +1280,7 @@ pub fn process_realm_change(
     current_realm: Res<CurrentRealm>,
     mut segment_config: Option<ResMut<SegmentConfig>>,
     player: Query<Entity, With<PrimaryUser>>,
+    teleport_target: Res<RealmInitialLocation>,
 ) {
     if current_realm.is_changed() {
         // move to oow on realm change
@@ -1285,7 +1289,13 @@ pub fn process_realm_change(
             .ok()
             .and_then(|p| commands.get_entity(p).ok())
         {
-            commands.try_insert(OutOfWorld::default());
+            // A realm change that says where to land starts a landing of its own. Without one,
+            // a landing already under way goes on in the new realm, on the spawn point it names.
+            if *teleport_target == RealmInitialLocation::None {
+                commands.try_insert_if_new(OutOfWorld::default());
+            } else {
+                commands.try_insert(OutOfWorld::default());
+            }
         }
 
         info!(

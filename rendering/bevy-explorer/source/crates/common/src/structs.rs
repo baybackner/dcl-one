@@ -1955,8 +1955,9 @@ pub struct PlayerTeleported {
 /// than `scene_runner`) so lower-level crates like `comms` can read it; `scene_runner` re-exports it.
 #[derive(Component, Default, Debug)]
 pub struct OutOfWorld {
-    /// The name (any case) of the spawn point of the destination scene to be placed on. Without
-    /// one, or when the scene has none of that name, the scene's default spawn points are used.
+    /// The name of the spawn point of the destination scene to be placed on, compared in
+    /// lowercase. Without one, or when the scene has none of that name, the scene's default spawn
+    /// points are used.
     pub spawn_point: Option<String>,
 }
 

@@ -29,7 +29,8 @@ export type ChatCommand =
   | { kind: 'system'; message: string }
 
 // Each command's usage, as /help lists it and an invalid destination answers.
-const GOTO_USAGE = '/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World'
+const GOTO_USAGE =
+  '/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World\n  x,y, random and crowd are in Genesis City; genesis is the city, any other name is a world'
 const GOTO_LOCAL_USAGE = '/goto-local <x,y | x,y/spawn | spawn>\n  Teleport inside of the current realm'
 const WORLD_USAGE = '/world <world>\n  Jump to a world (alias of /goto world)'
 const usageReply = (usage: string): string => `🔴 Invalid parameters, usage:\n${usage}`
@@ -165,7 +166,8 @@ export interface GotoHere {
 }
 
 /** What a `/goto` asks of the engine, or the line to answer with instead. `reply` is the answer
- *  once the request succeeds; `world` is the world as the player typed it. */
+ *  once the request succeeds; `world` is the world travelled to, as the player typed it (none for
+ *  Genesis City or a realm's address). */
 export type GotoPlan =
   | { kind: 'reply'; message: string }
   /** A teleport inside the realm the player is in. */
@@ -181,8 +183,8 @@ const REALM_URL = /^https?:\/\//i
  * A parcel alone is a Genesis City parcel, reached by a realm change from a world, unless `local`.
  * In a realm of any other kind it is a parcel of that realm: a scene preview refuses realm changes,
  * and its parcels are the creator's own. A world the player is already in is a teleport inside it.
- * `genesisRealm` is the Genesis City realm's address. `random` and `crowd` are resolved to a
- * parcel by the caller.
+ * `genesisRealm` is the Genesis City realm's address. `random` and `crowd` come with the parcel the
+ * caller picked for them, which is Genesis City's from any realm.
  */
 export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, genesisRealm: string): GotoPlan {
   const spawnPoint = target.spawnPoint ?? undefined
@@ -190,7 +192,8 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
   const inWorld = (p: { x: number; y: number }): boolean => Math.abs(p.x) <= WORLD_PARCEL_LIMIT && Math.abs(p.y) <= WORLD_PARCEL_LIMIT
   if (target.world == null) {
     const parcel = target.parcel ?? here.parcel
-    const toGenesis = !local && here.kind === 'world'
+    const genesisPlace = target.random || target.crowd
+    const toGenesis = !local && (here.kind === 'world' || (genesisPlace && here.kind === 'other'))
     const inside = here.kind === 'genesis' || toGenesis ? inGenesis(parcel) : here.kind === 'other' || inWorld(parcel)
     if (target.parcel != null && !inside) return outside(parcel)
     if (toGenesis) return { kind: 'travel', realm: genesisRealm, parcel, spawnPoint, reply: teleported(parcel) }
@@ -200,10 +203,11 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
   const name = target.world
   const toGenesis = name.toLowerCase() === 'genesis'
   const url = REALM_URL.test(name)
-  // a realm's address goes as it is; anything else has to be a world's name
+  // a realm's address goes as it is, which the grammar reads whole: no parcel or spawn point comes
+  // with it. Anything else has to be a world's name
   if (!toGenesis && !url && !isWorldName(name)) return { kind: 'reply', message: usageReply(GOTO_USAGE) }
-  // a parcel of Genesis City or of a world, within its bounds; a realm given by address has its own
-  if (target.parcel != null && !url && !(toGenesis ? inGenesis(target.parcel) : inWorld(target.parcel))) return outside(target.parcel)
+  // a parcel of Genesis City or of a world, within its bounds
+  if (target.parcel != null && !(toGenesis ? inGenesis(target.parcel) : inWorld(target.parcel))) return outside(target.parcel)
   const realm = toGenesis ? genesisRealm : url ? name : worldName(name)
   // a world is the same one by its name or by its address on a worlds server
   const there = toGenesis ? here.kind === 'genesis' : here.kind === 'world' && here.realm === worldOfRealm(realm)
@@ -212,7 +216,9 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
     const parcel = target.parcel ?? here.parcel
     return { kind: 'teleport', ...parcel, spawnPoint, reply: teleported(parcel) }
   }
-  return { kind: 'travel', realm, parcel: target.parcel ?? undefined, spawnPoint, reply: `🟢 Welcome to the ${name} world!`, world: name }
+  const world = toGenesis || url ? undefined : name
+  const reply = world != null ? `🟢 Welcome to the ${world} world!` : `🟢 Welcome to ${toGenesis ? 'Genesis City' : name}!`
+  return { kind: 'travel', realm, parcel: target.parcel ?? undefined, spawnPoint, reply, world }
 }
 
 /** Parse a raw chat input into an action. Non-`/` lines pass through as `send`. */

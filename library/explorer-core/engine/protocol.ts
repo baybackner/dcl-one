@@ -1064,8 +1064,8 @@ export interface TeleportRequest {
   realm?: string
   /** The scene answers with a `travelResult` carrying this id. */
   travelId?: number
-  /** Land on the destination scene's spawn point of this name (any case); its default spawn
-   *  without one, or when the scene has none of that name. */
+  /** Land on the destination scene's spawn point of this name (compared in lowercase); its default
+   *  spawn without one, or when the scene has none of that name. */
   spawnPoint?: string
 }
 

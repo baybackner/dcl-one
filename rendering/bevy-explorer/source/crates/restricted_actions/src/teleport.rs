@@ -1,9 +1,10 @@
+pub(crate) mod diagnostics;
+
 use bevy::{
     ecs::{schedule::ScheduleConfigs, system::ScheduleSystem},
     math::Vec3Swizzles,
     prelude::*,
 };
-use bevy_console::ConsoleCommand;
 use common::{
     rpc::{RpcCall, RpcCallEvent, RpcResultSender},
     structs::{AvatarDynamicState, PermissionType, PrimaryUser, ReturnedToWorld, SpawnPoint},
@@ -35,10 +36,17 @@ type TeleportAction = (
 /// The longest spawn point name a teleport may ask for, in bytes.
 const MAX_SPAWN_POINT_NAME: usize = 128;
 
-/// The last landing that looked for a spawn point by name, and whether its scene had one of
-/// that name: the debug panel's Teleport section shows it.
-#[derive(Resource, Default)]
-pub(crate) struct LastNamedLanding(Option<(String, bool)>);
+fn spawn_point_name_too_long() -> String {
+    format!("spawn point name is longer than {MAX_SPAWN_POINT_NAME} bytes")
+}
+
+/// On the player: the last landing of theirs that looked for a spawn point by name, and whether
+/// its scene had one of that name. The debug panel's Teleport section shows it.
+#[derive(Component, Debug, PartialEq)]
+pub(crate) struct LastNamedLanding {
+    name: String,
+    found: bool,
+}
 
 /// The teleport and the landing, in the order they need. A landing is placed before a new
 /// teleport moves the player: the move is immediate and the new landing's `OutOfWorld` is
@@ -122,9 +130,7 @@ pub fn teleport_player(
                 .as_ref()
                 .is_some_and(|name| name.len() > MAX_SPAWN_POINT_NAME)
             {
-                response.send(Err(format!(
-                    "spawn point name is longer than {MAX_SPAWN_POINT_NAME} bytes"
-                )));
+                response.send(Err(spawn_point_name_too_long()));
                 continue;
             }
             actions.push((
@@ -192,7 +198,7 @@ pub fn teleport_player(
     }
 }
 
-/// The scene's first spawn point of this name, whatever the case of either.
+/// The scene's first spawn point of this name, both compared in lowercase.
 fn named_spawn_point<'a>(spawn_points: &'a [SpawnPoint], name: &str) -> Option<&'a SpawnPoint> {
     let name = name.to_lowercase();
     spawn_points.iter().find(|spawn_point| {
@@ -215,43 +221,17 @@ fn default_spawn_points(spawn_points: &[SpawnPoint]) -> Vec<&SpawnPoint> {
     }
 }
 
-/// The spawn point a landing names, for the debug panel's Teleport section.
-#[derive(clap::Parser, ConsoleCommand)]
-#[command(name = "/teleport_state")]
-pub(crate) struct TeleportState;
-
-pub(crate) fn teleport_state(
-    mut input: ConsoleCommand<TeleportState>,
-    player: Query<&OutOfWorld, With<PrimaryUser>>,
-    realm_target: Res<RealmInitialLocation>,
-    last_named: Res<LastNamedLanding>,
-) {
-    if input.take().is_none() {
-        return;
-    }
-    // of the landing under way, else of the realm change that has yet to start one
-    let pending = player
-        .single()
-        .ok()
-        .and_then(|out_of_world| out_of_world.spawn_point.clone())
-        .or_else(|| match &*realm_target {
-            RealmInitialLocation::Base { spawn_point }
-            | RealmInitialLocation::Parcel { spawn_point, .. } => spawn_point.clone(),
-            RealmInitialLocation::None => None,
+/// Lets the player into the world. A landing that named a spawn point keeps whether its scene
+/// had it.
+fn end_landing(commands: &mut Commands, player: Entity, out_of_world: &OutOfWorld, found: bool) {
+    let mut player = commands.entity(player);
+    player.remove::<OutOfWorld>();
+    if let Some(name) = &out_of_world.spawn_point {
+        player.insert(LastNamedLanding {
+            name: name.clone(),
+            found,
         });
-    input.reply_ok(
-        serde_json::json!({
-            "pending": pending,
-            "last": last_named.0.as_ref().map(|(name, found)| {
-                serde_json::json!({ "name": name, "found": found })
-            }),
-            "unavailable": {
-                "pending": "No landing under way names a spawn point.",
-                "last": "No landing has looked for a named spawn point.",
-            },
-        })
-        .to_string(),
-    );
+    }
 }
 
 pub(crate) fn handle_out_of_world(
@@ -270,7 +250,6 @@ pub(crate) fn handle_out_of_world(
     foreign_players: Query<&GlobalTransform, With<ForeignPlayer>>,
     wallet: Res<Wallet>,
     mut returned: EventWriter<ReturnedToWorld>,
-    mut last_named: ResMut<LastNamedLanding>,
 ) {
     let Ok((player, mut t, out_of_world)) = player.single_mut() else {
         return;
@@ -292,10 +271,7 @@ pub(crate) fn handle_out_of_world(
         Some(PointerResult::Nothing) => {
             debug!("scene {parcel} doesn't exist, returning to world");
             debug!("everything: {:?}", pointers);
-            if let Some(name) = &out_of_world.spawn_point {
-                last_named.0 = Some((name.clone(), false));
-            }
-            commands.entity(player).remove::<OutOfWorld>();
+            end_landing(&mut commands, player, out_of_world, false);
             returned.write(ReturnedToWorld::SceneReady);
             return;
         }
@@ -317,10 +293,7 @@ pub(crate) fn handle_out_of_world(
     // fetched has one and never ticks past its spawn tick.
     if matches!(maybe_loadstate, Some(SceneLoading::Failed)) {
         debug!("failed, returning to world");
-        if let Some(name) = &out_of_world.spawn_point {
-            last_named.0 = Some((name.clone(), false));
-        }
-        commands.entity(player).remove::<OutOfWorld>();
+        end_landing(&mut commands, player, out_of_world, false);
         returned.write(ReturnedToWorld::SceneLoadFailed);
         return;
     }
@@ -378,12 +351,11 @@ pub(crate) fn handle_out_of_world(
             let named = out_of_world.spawn_point.as_ref().and_then(|name| {
                 let found = named_spawn_point(&context.spawn_points, name);
                 if found.is_none() {
-                    warn!(
+                    debug!(
                         "scene {} has no spawn point named {name:?}, using its default",
                         context.hash
                     );
                 }
-                last_named.0 = Some((name.clone(), found.is_some()));
                 found
             });
             let spawn_points = match named {
@@ -415,7 +387,7 @@ pub(crate) fn handle_out_of_world(
 
             debug!("chose {best_position}");
             t.translation = best_position;
-            commands.entity(player).remove::<OutOfWorld>();
+            end_landing(&mut commands, player, out_of_world, named.is_some());
             returned.write(if context.broken() {
                 ReturnedToWorld::SceneBroken
             } else {
@@ -504,7 +476,6 @@ mod tests {
         wallet.finalize_as_guest();
         world.insert_resource(wallet);
         world.init_resource::<Events<ReturnedToWorld>>();
-        world.init_resource::<LastNamedLanding>();
         let player = world
             .spawn((
                 PrimaryUser::default(),
@@ -525,6 +496,14 @@ mod tests {
             .collect()
     }
 
+    /// What the player's last landing by name looked for, and whether its scene had it.
+    fn last_named(world: &World, player: Entity) -> Option<(&str, bool)> {
+        world
+            .entity(player)
+            .get::<LastNamedLanding>()
+            .map(|last| (last.name.as_str(), last.found))
+    }
+
     fn two_spawn_points() -> Vec<SpawnPoint> {
         spawn_points(serde_json::json!([
             { "name": "Lobby", "default": true, "position": { "x": 1, "y": 0, "z": 1 } },
@@ -533,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn a_named_spawn_point_is_found_whatever_its_case() {
+    fn a_named_spawn_point_is_found_in_lowercase() {
         let spawn_points = spawn_points(serde_json::json!([
             { "name": "Lobby", "default": true, "position": { "x": 1, "y": 0, "z": 1 } },
             { "name": "roof", "position": { "x": 2, "y": 9, "z": 2 } },
@@ -554,6 +533,12 @@ mod tests {
             { "name": "Entrée", "position": { "x": 7, "y": 0, "z": 7 } },
         ]));
         assert!(named_spawn_point(&accented, "ENTRÉE").is_some());
+        // lowercase, not case folding: a letter whose capital is two letters keeps its own
+        let sharp = super::tests::spawn_points(serde_json::json!([
+            { "name": "Straße", "position": { "x": 8, "y": 0, "z": 8 } },
+        ]));
+        assert!(named_spawn_point(&sharp, "STRAßE").is_some());
+        assert!(named_spawn_point(&sharp, "STRASSE").is_none());
         // without a name, the scene's default ones
         assert_eq!(default_spawn_points(&spawn_points).len(), 1);
         assert_eq!(default_spawn_points(&spawn_points[1..]).len(), 3);
@@ -571,10 +556,7 @@ mod tests {
             Vec3::new(2.0, 9.0, -3.0)
         );
         assert_eq!(returned(&world), vec![ReturnedToWorld::SceneReady]);
-        assert_eq!(
-            world.resource::<LastNamedLanding>().0,
-            Some(("roof".to_owned(), true))
-        );
+        assert_eq!(last_named(&world, player), Some(("roof", true)));
     }
 
     #[test]
@@ -588,10 +570,7 @@ mod tests {
             world.entity(player).get::<Transform>().unwrap().translation,
             Vec3::new(1.0, 0.0, -1.0)
         );
-        assert_eq!(
-            world.resource::<LastNamedLanding>().0,
-            Some(("cellar".to_owned(), false))
-        );
+        assert_eq!(last_named(&world, player), Some(("cellar", false)));
     }
 
     #[test]
@@ -604,7 +583,7 @@ mod tests {
             world.entity(player).get::<Transform>().unwrap().translation,
             Vec3::new(1.0, 0.0, -1.0)
         );
-        assert_eq!(world.resource::<LastNamedLanding>().0, None);
+        assert_eq!(last_named(&world, player), None);
     }
 
     #[test]
@@ -639,10 +618,7 @@ mod tests {
 
         assert!(!world.entity(player).contains::<OutOfWorld>());
         assert_eq!(returned(&world), vec![ReturnedToWorld::SceneReady]);
-        assert_eq!(
-            world.resource::<LastNamedLanding>().0,
-            Some(("roof".to_owned(), false))
-        );
+        assert_eq!(last_named(&world, player), Some(("roof", false)));
     }
 
     // A scene whose main js could not be fetched fails after it has a context, still at its first
@@ -653,6 +629,12 @@ mod tests {
             Some("roof"),
             Some((Some(SceneLoading::Failed), two_spawn_points())),
         );
+        let scene = world.resource::<LiveScenes>().scenes["scene"];
+        world
+            .entity_mut(scene)
+            .get_mut::<RendererSceneContext>()
+            .unwrap()
+            .tick_number = 0;
 
         world.run_system_once(handle_out_of_world).unwrap();
 
@@ -663,6 +645,7 @@ mod tests {
             world.entity(player).get::<Transform>().unwrap().translation,
             Vec3::new(8.0, 0.0, -8.0)
         );
+        assert_eq!(last_named(&world, player), Some(("roof", false)));
     }
 
     /// An app running `teleport_player`, with a player in the world.
@@ -802,8 +785,13 @@ mod tests {
         });
         app.update();
 
-        assert!(matches!(answer.try_recv(), Ok(Err(reason)) if reason.contains("128")));
+        assert!(
+            matches!(answer.try_recv(), Ok(Err(reason)) if reason == spawn_point_name_too_long())
+        );
+        // refused before anything moved
         assert_eq!(landing_spawn_point(&app, player), None);
+        let position = app.world().entity(player).get::<Transform>().unwrap();
+        assert_eq!(position.translation, Vec3::ZERO);
         // the longest one allowed goes through
         hud_teleport(
             &mut app,
@@ -847,7 +835,6 @@ mod tests {
             .init_resource::<AppConfig>()
             .init_resource::<CurrentRealm>()
             .init_resource::<PortableScenes>()
-            .init_resource::<LastNamedLanding>()
             .insert_resource(RealmInitialLocation::None)
             .insert_resource(wallet)
             .add_systems(Update, landing_systems());
@@ -875,10 +862,7 @@ mod tests {
         hud_teleport(&mut app, (1, 1), None, None);
 
         // the old landing found its spawn point, and is over
-        assert_eq!(
-            app.world().resource::<LastNamedLanding>().0,
-            Some(("roof".to_owned(), true))
-        );
+        assert_eq!(last_named(app.world(), player), Some(("roof", true)));
         // the new one names none, and starts from the parcel it asked for
         assert_eq!(landing_spawn_point(&app, player), Some(None));
         let position = app.world().entity(player).get::<Transform>().unwrap();

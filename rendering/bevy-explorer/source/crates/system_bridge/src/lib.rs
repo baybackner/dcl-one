@@ -150,8 +150,8 @@ pub enum SystemApi {
     SetHomeScene(HomeScene),
     /// The HUD's teleport: to a parcel of the realm the player is in, or with a realm a realm
     /// change landing on the parcel (on the realm's own spawn without one). `spawn_point` names
-    /// the spawn point of the scene landed in to use, in any case; the scene's default ones are
-    /// used without it, and when the scene has none of that name.
+    /// the spawn point of the scene landed in to use, compared in lowercase; the scene's default
+    /// ones are used without it, and when the scene has none of that name.
     Teleport {
         to: Option<bevy::math::IVec2>,
         realm: Option<String>,

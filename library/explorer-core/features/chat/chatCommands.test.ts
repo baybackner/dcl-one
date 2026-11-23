@@ -68,7 +68,8 @@ describe('parseChatCommand', () => {
   it('missing/invalid args → the usage as a system message, never a broadcast', () => {
     expect(parseChatCommand('/goto')).toEqual({
       kind: 'system',
-      message: '🔴 Invalid parameters, usage:\n/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World'
+      message:
+        '🔴 Invalid parameters, usage:\n/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World\n  x,y, random and crowd are in Genesis City; genesis is the city, any other name is a world'
     })
     expect(parseChatCommand('/world').kind).toBe('system')
     expect(parseChatCommand('/goto 1 2 3').kind).toBe('system')
@@ -139,6 +140,17 @@ describe('resolveGoto', () => {
     expect(resolve('genesis', elsewhere)).toMatchObject({ kind: 'travel', realm: GENESIS })
   })
 
+  it('random and crowd are Genesis City places from any realm', () => {
+    // as the session hands them over: with the parcel it picked
+    const random = { ...parseGotoTarget('random'), parcel: { x: 7, y: 8 } }
+    const crowd = { ...parseGotoTarget('crowd'), parcel: { x: 9, y: 10 } }
+    expect(resolveGoto(random, false, inGenesis, GENESIS)).toEqual({ kind: 'teleport', x: 7, y: 8, spawnPoint: undefined, reply: '🟢 You teleported to 7,8.' })
+    for (const here of [inWorld, elsewhere]) {
+      expect(resolveGoto(random, false, here, GENESIS)).toEqual({ kind: 'travel', realm: GENESIS, parcel: { x: 7, y: 8 }, spawnPoint: undefined, reply: '🟢 You teleported to 7,8.' })
+      expect(resolveGoto(crowd, false, here, GENESIS)).toMatchObject({ kind: 'travel', realm: GENESIS, parcel: { x: 9, y: 10 } })
+    }
+  })
+
   it('a local parcel stays in the realm, within its own bounds', () => {
     expect(resolve('10,20', inWorld, true)).toMatchObject({ kind: 'teleport', x: 10, y: 20 })
     expect(resolve('160,155', inWorld, true)).toEqual({ kind: 'reply', message: '🔴 Error: Parcel (160, 155) is outside of the bounds.' })
@@ -158,14 +170,25 @@ describe('resolveGoto', () => {
   })
 
   it('genesis, in any case, is Genesis City', () => {
-    expect(resolve('genesis', inWorld)).toMatchObject({ kind: 'travel', realm: GENESIS, reply: '🟢 Welcome to the genesis world!' })
-    expect(resolve('Genesis', inWorld)).toMatchObject({ kind: 'travel', realm: GENESIS })
+    // no world's name to blame for a failure
+    expect(resolve('genesis', inWorld)).toEqual({ kind: 'travel', realm: GENESIS, parcel: undefined, spawnPoint: undefined, reply: '🟢 Welcome to Genesis City!', world: undefined })
+    expect(resolve('Genesis', inWorld)).toMatchObject({ kind: 'travel', realm: GENESIS, reply: '🟢 Welcome to Genesis City!' })
     expect(resolve('GENESIS', inGenesis)).toEqual({ kind: 'reply', message: '🟡 You are already in GENESIS!' })
   })
 
   it("a realm's address goes as it is; any other name has to be a world's", () => {
-    expect(resolve('https://realm.example/other', inWorld)).toMatchObject({ kind: 'travel', realm: 'https://realm.example/other' })
+    expect(resolve('https://realm.example/other', inWorld)).toEqual({
+      kind: 'travel',
+      realm: 'https://realm.example/other',
+      parcel: undefined,
+      spawnPoint: undefined,
+      reply: '🟢 Welcome to https://realm.example/other!',
+      world: undefined
+    })
     expect(resolve('http://localhost:8000', inGenesis)).toMatchObject({ kind: 'travel', realm: 'http://localhost:8000' })
+    // read whole: what follows an address is part of it, no parcel or spawn point
+    expect(resolve('https://realm.example/other/999,999', inGenesis)).toMatchObject({ kind: 'travel', realm: 'https://realm.example/other/999,999', parcel: undefined })
+    expect(resolve('https://realm.example/other/door', inGenesis)).toMatchObject({ kind: 'travel', realm: 'https://realm.example/other/door', spawnPoint: undefined })
     // a world whose name only starts like an address
     expect(resolve('httpsdog', inGenesis)).toMatchObject({ kind: 'travel', realm: 'httpsdog.dcl.eth' })
     for (const bad of ['../x', 'a?b', 'my-world', 'your.world.eth', 'localhost:8000', 'boedo/1,2,3']) {
@@ -186,8 +209,6 @@ describe('resolveGoto', () => {
     // inside: Genesis City's extension, a world's edge
     expect(resolve('genesis/160,155', inWorld)).toMatchObject({ kind: 'travel', parcel: { x: 160, y: 155 } })
     expect(resolve('mana/-150,150', inGenesis)).toMatchObject({ kind: 'travel', parcel: { x: -150, y: 150 } })
-    // a realm given by address has bounds of its own
-    expect(resolve('https://realm.example/other', inGenesis).kind).toBe('travel')
   })
 
   it('the world the player is in is a teleport inside it, or nothing to do', () => {

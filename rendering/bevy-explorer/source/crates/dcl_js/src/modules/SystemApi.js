@@ -255,7 +255,7 @@ module.exports.getHomeScene = async function() {
 // The HUD's teleport. args: { parcel?: { x, y }, realm?: string, spawnPoint?: string }
 // - parcel alone: a parcel of the realm the player is in
 // - realm: a realm change, landing on the parcel or (without one) on the realm's own spawn
-// - spawnPoint: the name (any case) of the spawn point of the scene landed in to use
+// - spawnPoint: the name (compared in lowercase) of the spawn point of the scene landed in to use
 // rejects with the engine's reason when the teleport or the realm change fails
 module.exports.teleport = async function(args) {
     const parcel = args.parcel;

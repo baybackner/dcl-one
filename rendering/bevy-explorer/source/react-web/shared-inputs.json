@@ -5371,6 +5371,10 @@
           "kind": "regular"
         },
         {
+          "name": "chatGoto.test.tsx",
+          "kind": "regular"
+        },
+        {
           "name": "chatTranslation.test.tsx",
           "kind": "regular"
         },
@@ -5962,7 +5966,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bevy-api.ts",
-      "sha256": "e47a4ccc61da3109524bf3d94f4e83d24b927ccbba78d14c4c1ad862620e55af"
+      "sha256": "feabbe372a6bbba49254d2cc0d91b19712cc73761f1a3464cf0ebb71e4e035b2"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/bridge.ts",
@@ -6087,6 +6091,10 @@
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/wearables.ts",
       "sha256": "1173e8bb8edc527060ec7417283d8ba00ada7f9deffaf9cd0d3e86cb7239c0ae"
+    },
+    {
+      "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/domains/world.ts",
+      "sha256": "4e91e34761923bae9be6b41bae88d48cfb53510cfc6546e18c9aaa00caf66f12"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/bridge-scene/src/http.ts",
@@ -6329,6 +6337,10 @@
       "sha256": "9215e44d8c803335b125591254a6584453268644d0d65b4b59fb375322ef83aa"
     },
     {
+      "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeTravel.test.ts",
+      "sha256": "eaaa3f653c2d70045af664a22525bdb00044c8cdde0ecb102ed3f58d794d3dee"
+    },
+    {
       "path": "rendering/bevy-explorer/source/react-web/src/test/bridgeVoice.test.ts",
       "sha256": "0b6c48ce718ce73b3a9da5eaf0a8af02553ac95509c81c1db8169dc02304fff3"
     },
@@ -6394,7 +6406,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/realmTravel.test.tsx",
-      "sha256": "0ba0fc7ab592024b78d61008731387b72bfcb6973131ba5de54d25a63e2fe917"
+      "sha256": "e16dc3f88748d06173160d70b18eb950146d37c292c85b53ecbff0021a295525"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/src/test/recoverSigner.ts",
@@ -6458,7 +6470,7 @@
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/tsconfig.json",
-      "sha256": "3bf754deaff86ccc895d025f3b9579d399c09e8243749cb1e7921763b6bcee87"
+      "sha256": "5bddfaf72d3b327621dd0db5b5e8f6e7ba8f2b35be626925a0e670948b20c01c"
     },
     {
       "path": "rendering/bevy-explorer/source/react-web/vite.config.ts",
@@ -6525,6 +6537,7 @@
     "rendering/bevy-explorer/source/react-web/src/test/bridgeSettings.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeTeleport.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeTextureOptimization.test.ts",
+    "rendering/bevy-explorer/source/react-web/src/test/bridgeTravel.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeVoice.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/bridgeVoiceChat.test.ts",
     "rendering/bevy-explorer/source/react-web/src/test/connectivityApi.test.ts",
@@ -6609,7 +6622,7 @@
     },
     {
       "path": "library/explorer-core/engine/mockBridge.ts",
-      "sha256": "2ae387c2ecb344a766518b3ea65158b654f65b6ccbc9fcf57dc666a4c9a11dbe"
+      "sha256": "d09372b33c2a5e9abbf0a15e06b7e6b3cea5e72eb0c4e68b598afce9836caa31"
     },
     {
       "path": "library/explorer-core/engine/mockEvents.ts",
@@ -6649,7 +6662,7 @@
     },
     {
       "path": "library/explorer-core/engine/protocol.ts",
-      "sha256": "83b679f1a279f3c4f2f943578ea3717a2e10a539feea34bfd1b6d4d93a1380ac"
+      "sha256": "77739eb68dc21596aff14780fa1292a74f338dd07abea4d70d09afc1a31b27f3"
     },
     {
       "path": "library/explorer-core/engine/requestIds.ts",
@@ -6693,11 +6706,11 @@
     },
     {
       "path": "library/explorer-core/features/chat/chatCommands.test.ts",
-      "sha256": "0ee3a04d94599146a48f751ed5310ee3bc4c4b0f729471e0669238d5dd1a8bc4"
+      "sha256": "abc5f4f495b56b239cbaa51aba80a7e3a239b3eaf5a9faf32723fe7580e293fd"
     },
     {
       "path": "library/explorer-core/features/chat/chatCommands.ts",
-      "sha256": "6f7d02de3dbac514f1b2ac2d937747a92d44261f464246644c876aa13d660c35"
+      "sha256": "39e0a42a2ce76130a09ac166a9a49099408ea6833eef59acdb7d6d521a5231b6"
     },
     {
       "path": "library/explorer-core/features/chat/chatParse.ts",
@@ -10221,7 +10234,7 @@
     },
     {
       "path": "library/ui/apps/hud/features/session/useEngineSession.ts",
-      "sha256": "a5238527e4b5a19eb561960433c69b52007823d80f4b9c46eb1fef287c4dd548"
+      "sha256": "720aed23b21f39997345e4f15e975bf87fdd578df625b099a31b96fa53661d41"
     },
     {
       "path": "library/ui/apps/hud/features/settings/KeyBindingsTab.module.css",
@@ -10650,6 +10663,10 @@
     {
       "path": "library/ui/apps/hud/test/hosted/chat.test.tsx",
       "sha256": "6af91e8fd265f7c714534fb93dbf63a92401a6b5954a22c90b9bcd7c01f3cff4"
+    },
+    {
+      "path": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "sha256": "d885f022a8389ef20cae0315a791a14c15c2abc62e8e70ae9e8cbd1305969187"
     },
     {
       "path": "library/ui/apps/hud/test/hosted/chatTranslation.test.tsx",
@@ -38883,6 +38900,51 @@
       "kind": "test:runtime"
     },
     {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/engine/protocol.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/explorer-core/features/map/atlas.ts",
+      "kind": "test:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "native:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "production:runtime"
+    },
+    {
+      "from": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
+      "to": "library/ui/apps/hud/test/harness.tsx",
+      "kind": "test:runtime"
+    },
+    {
       "from": "library/ui/apps/hud/test/hosted/chatTranslation.test.tsx",
       "to": "library/explorer-core/features/chat/translation.ts",
       "kind": "native:runtime"
@@ -45624,11 +45686,6 @@
     },
     {
       "from": "rendering/bevy-explorer/source/react-web/src/test/realmTravel.test.tsx",
-      "to": "library/explorer-core/features/map/atlas.ts",
-      "kind": "test:runtime"
-    },
-    {
-      "from": "rendering/bevy-explorer/source/react-web/src/test/realmTravel.test.tsx",
       "to": "library/ui/apps/hud/features/session/SceneLoadingOverlay.tsx",
       "kind": "test:runtime"
     },
@@ -48095,6 +48152,11 @@
     {
       "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
       "to": "library/ui/apps/hud/test/hosted/chat.test.tsx",
+      "kind": "type"
+    },
+    {
+      "from": "rendering/bevy-explorer/source/react-web/tsconfig.json",
+      "to": "library/ui/apps/hud/test/hosted/chatGoto.test.tsx",
       "kind": "type"
     },
     {
