@@ -379,6 +379,47 @@ describe("running a credits group through the state machine", () => {
     }
   });
 
+  it("a kept group's revert of the hash it was answered is its caller's to attribute: pending, nothing released", async () => {
+    const h = await harness({ confirm: "reverted" });
+    const deps = { ...h.deps, onCreditsCall: () => true, onCreditsEnvelope: () => true };
+    const result = await runGroup(deps, h.group, h.resolved);
+    expect(result).toMatchObject({ status: "pending", txHash: expect.stringMatching(/^0x[0-9a-f]{64}$/) });
+    expect(h.shop.log.some((r) => r.name === "cancelCreditAuthorizations")).toBe(false);
+  });
+
+  it("hands a kept group's bytes to the caller before they go: the relayed execution, or the wallet's useCredits", async () => {
+    for (const gasless of [true, false]) {
+      const h = await harness();
+      const seen: { bytes: string; posts: number; sent: number }[] = [];
+      const deps = {
+        ...h.deps,
+        ctx: { ...h.deps.ctx, gasless },
+        onCreditsCall: () => true,
+        onCreditsEnvelope: (bytes: string) => {
+          seen.push({ bytes, posts: h.relay.posts.length, sent: h.wallet.sent.length });
+        },
+      };
+      await runGroup(deps, h.group, h.resolved);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ posts: 0, sent: 0 });
+      // The very bytes that went: the wallet's transaction data, or what the relay was asked to send.
+      const went = gasless ? JSON.stringify(h.relay.posts[0]) : h.wallet.sent[0]!.data;
+      expect(went.toLowerCase()).toContain(seen[0]!.bytes.toLowerCase().slice(2));
+    }
+  });
+
+  it("sends nothing and gives the credit back when the caller couldn't keep a kept group's bytes", async () => {
+    for (const gasless of [true, false]) {
+      const h = await harness();
+      const deps = { ...h.deps, ctx: { ...h.deps.ctx, gasless }, onCreditsCall: () => true, onCreditsEnvelope: () => false };
+      const result = await runGroup(deps, h.group, h.resolved);
+      expect(result).toMatchObject({ status: "failed", failure: { kind: "refused" } });
+      expect(h.relay.posts).toHaveLength(0);
+      expect(h.wallet.sent).toHaveLength(0);
+      expect(h.shop.log.find((r) => r.name === "cancelCreditAuthorizations")?.body).toEqual({ salts: [`0x${"a1".repeat(32)}`] });
+    }
+  });
+
   it("wallet rejection: the group fails as rejected and its unbroadcast credit is released", async () => {
     const h = await harness();
     h.wallet.next = "reject";

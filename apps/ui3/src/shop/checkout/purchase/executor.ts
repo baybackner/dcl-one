@@ -80,6 +80,12 @@ export type CheckoutDeps = {
    * after the relay couldn't.
    */
   onCreditsCall?: (call: { creditId: string; expiresAt: number; built: BuiltUseCredits }) => boolean | void;
+  /**
+   * With `onCreditsCall`: the exact bytes the group's transaction is about to carry (the relayed execution as signed, or the
+   * useCredits the wallet is handed), before they go. False: the caller couldn't keep their identity, and nothing is sent.
+   * A group kept this way is its caller's to attribute: a revert of the hash it was answered is never taken as its own here.
+   */
+  onCreditsEnvelope?: (bytes: Hex) => boolean | void;
 };
 
 /** The MANA a unit's sale moves: a mint's price, or a MANA listing's after its coupon; null for a USD-pegged one. */
@@ -215,10 +221,12 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
     dispatchSafe(store, keyId, { type: "observed" });
   };
   const chainId = group.key.chainId;
-  const onBuilt =
-    !split && deps.onCreditsCall
-      ? (built: BuiltUseCredits) => deps.onCreditsCall!({ creditId, expiresAt: Math.floor(Number(credit.expiresAt)), built })
-      : undefined;
+  const kept = !split && deps.onCreditsCall != null;
+  const onBuilt = kept ? (built: BuiltUseCredits) => deps.onCreditsCall!({ creditId, expiresAt: Math.floor(Number(credit.expiresAt)), built }) : undefined;
+  // The bytes a kept group sends, kept before they go: only a revert of these very bytes can be its own.
+  const keepEnvelope = (bytes: Hex): void => {
+    if (deps.onCreditsEnvelope?.(bytes) === false) throw new CallNotKeptError();
+  };
   // The fee-free way was tried and couldn't run, so the wallet's own transaction is its fallback.
   let fellBack = false;
   // Why it couldn't run, when the relay said (its daily limits), for the buyer to read beside the fallback's failure.
@@ -237,7 +245,9 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
                   if (split.onEnvelope!(call.data) === false) throw new Error("This browser couldn't keep a record of this purchase, so it wasn't sent. Nothing was charged.");
                 },
               }
-            : {}),
+            : kept && deps.onCreditsEnvelope
+              ? { onSignedCall: (call: { data: Hex }) => keepEnvelope(call.data) }
+              : {}),
           onBroadcast: ({ txHash: h }) => broadcast(h),
         });
         await waitForSettlement(ctx.reader, chainId, txHash!, ctx.wait);
@@ -259,22 +269,28 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       }
     }
     if (!settled) {
-      await buyManyWithCredits(ctx, { purchases, onBuilt, onHandoff: handoff, onBroadcast: ({ txHash: h }) => broadcast(h) });
+      await buyManyWithCredits(ctx, {
+        purchases,
+        onBuilt,
+        ...(kept && deps.onCreditsEnvelope ? { onDispatch: keepEnvelope } : {}),
+        onHandoff: handoff,
+        onBroadcast: ({ txHash: h }) => broadcast(h),
+      });
     }
     guard.submitFinished(creditId);
     dispatchSafe(store, keyId, { type: "confirmed", ...(txHash ? { txHash } : {}) });
     return { status: "confirmed", txHash };
   } catch (e) {
     guard.submitFinished(creditId);
-    // The caller couldn't keep the call before it was signed: nothing went, and the credit goes back.
-    if (e instanceof CallNotKeptError && !handedOff && txHash === null) {
+    // The caller couldn't keep the call, or its bytes, before they went: nothing was sent, and the credit goes back.
+    if (e instanceof CallNotKeptError && txHash === null) {
       const failure: GroupFailure = { kind: "refused", message: e.message };
       dispatchSafe(store, keyId, { type: "failed", failure });
       return { status: "failed", failure, released: await release(deps, [creditId]) };
     }
-    // A split's revert is its caller's to attribute first: a reverted receipt for the hash the relay answered may be some
-    // other transaction's, while this purchase's own can still land. Nothing is released here.
-    if (split && isRevertedTxError(e) && txHash) return { status: "pending", txHash };
+    // A split's revert, or a kept group's, is its caller's to attribute first: a reverted receipt for the hash the relay
+    // answered may be some other transaction's, while this purchase's own can still land. Nothing is released here.
+    if ((split || kept) && isRevertedTxError(e) && txHash) return { status: "pending", txHash };
     if (isRevertedTxError(e) && txHash) {
       guard.reverted(txHash);
       const failure: GroupFailure = { kind: "reverted", message: "The transaction failed on-chain and nothing was bought. The Credits held for it are released once the authorization expires and that is confirmed on chain." };

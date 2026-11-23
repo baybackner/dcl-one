@@ -1219,6 +1219,11 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
     if (op.split) {
       const decided = await checkSplit(op, op.split, store)
       if (decided !== null) return decided
+    } else if (op.sale) {
+      // A group paid by its credits, kept with its call before it was signed: found out by its own execution as a split is,
+      // never by its checkout's confirmed step, a receipt for the hash it was answered, a watch or its credit's SETTLED alone.
+      const decided = await findOutSplit(op, op.sale, store)
+      if (decided !== null) return decided
     }
     const progress = latest(store.getSnapshot().checkout?.groups[0] ?? null, op.progress ?? null)
     const handedOff = op.state === 'pending' || !!op.txHash || !!progress?.txHash || (progress != null && (progress.status === 'submitted' || progress.status === 'pending'))
@@ -2210,6 +2215,12 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
                     creditExpiresAt: expiresAt
                   }
                   return keep(op)
+                },
+                // The very bytes about to go, kept before they do: only a revert of these is this group's own.
+                onCreditsEnvelope: (bytes: Hex) => {
+                  if (!op.sale) return false
+                  op.sale = { ...op.sale, envelope: splitEnvelope(bytes) }
+                  return keep(op)
                 }
               }),
           ...(split
@@ -2279,17 +2290,18 @@ export function createShellShop(deps: ShellShopDeps): ShellShop {
         return { kind: 'confirmed' }
       }
       case 'pending': {
-        // A split's hash is read for what it is: an attributable success bought it; its own revert waits on the node's
-        // record of its credit (afterOwnRevert), and nothing here gives the credit back.
-        if (op.split && result.txHash) {
-          const outcome = await splitExecution(svc.manaEvidence(), op.split, result.txHash)
+        // A split's hash, or a kept group's, is read for what it is: an attributable success bought it; its own revert
+        // waits on the node's record of its credit (afterOwnRevert), and nothing here gives the credit back.
+        const own = op.split ?? op.sale
+        if (own && result.txHash) {
+          const outcome = await splitExecution(svc.manaEvidence(), own, result.txHash)
           if (outcome === 'bought') {
             move(op, 'succeeded', { txHash: result.txHash })
             return { kind: 'confirmed' }
           }
           if (outcome === 'reverted') {
             // Its own bytes reverted; the node's record of its credit still comes first (a replay may have bought it).
-            const after = await afterOwnRevert(op as Operation & { buyer: string }, op.split)
+            const after = await afterOwnRevert(op as Operation & { buyer: string }, own)
             if (after.kind === 'bought') {
               move(op, 'succeeded', { txHash: after.txHash })
               return { kind: 'confirmed' }

@@ -19,6 +19,7 @@ import { createLedger, type OperationRecord } from '../shell/shop/ledger'
 import type { PurchaseIntent } from '../shell/shop/walletGuard'
 import { encodeUseCredits, idToSalt, type UseCreditsArgs } from '../../shop/checkout/purchase/encoding'
 import type { BuiltUseCredits } from '../../shop/checkout/purchase/credits'
+import { keccak256 } from 'viem'
 
 const BUYER = BOOK.buyer.toLowerCase()
 const OTHER = '0x' + '9'.repeat(40)
@@ -120,6 +121,8 @@ function setup(
     receipts?: Record<string, 'success' | 'reverted'>
     /** What the chain says a hash's transaction is (./manaEvidence), for purchases checked against their own call. */
     evidence?: ShellShopServices['manaEvidence']
+    /** The node's record of one credit (its status and the hash it indexed); none by default. */
+    creditRecordOf?: ShellShopServices['creditRecordOf']
     /** The creator's profile name; Aurora by default. */
     creatorName?: ShellShopServices['creatorName']
     /** This tab's Web Locks (`locks().tab`); every lock is free by default. */
@@ -183,6 +186,7 @@ function setup(
     primeFlags: async () => {},
     run: run as unknown as ShellShopServices['run'],
     ...(opts.evidence ? { manaEvidence: opts.evidence } : {}),
+    ...(opts.creditRecordOf ? { creditRecordOf: opts.creditRecordOf } : {}),
     watch,
     manager: () => (opts.manager === undefined ? TRUSTED : opts.manager),
     guard,
@@ -1339,12 +1343,12 @@ describe('a purchase of several items (the cart)', () => {
       const args = argsFor(call, credit)
       return { creditId: credit, expiresAt: DEADLINE, built: { args, salts: [credit], chainId: 137, manager: TRUSTED, data: encodeUseCredits(args) } as unknown as BuiltUseCredits }
     }
-    /** The buyer's own useCredits, sent from its wallet, carrying `args`; a successful receipt for every hash. */
-    const chainSays = (txs: Record<string, UseCreditsArgs>): ShellShopServices['manaEvidence'] =>
+    /** The buyer's own useCredits, sent from its wallet, carrying `args`; a successful receipt unless `reverted` names it. */
+    const chainSays = (txs: Record<string, UseCreditsArgs>, reverted: string[] = []): ShellShopServices['manaEvidence'] =>
       () =>
         ({
           transaction: async (_chain: number, hash: string) => (txs[hash] ? { to: TRUSTED.address, input: encodeUseCredits(txs[hash]!), from: BOOK.buyer } : null),
-          receipt: async (_chain: number, hash: string) => (txs[hash] ? { transactionHash: hash, status: 'success', blockNumber: 1n } : null)
+          receipt: async (_chain: number, hash: string) => (txs[hash] ? { transactionHash: hash, status: reverted.includes(hash) ? 'reverted' : 'success', blockNumber: 1n } : null)
         }) as never
     /**
      * Runs each group as the executor does: its call kept before it is signed, then the relay's hash, confirmed. `at.saved`
@@ -1399,6 +1403,96 @@ describe('a purchase of several items (the cart)', () => {
       await vi.waitFor(() => expect(t.shown.some((s) => s.view.step === 'pending' || s.view.step === 'failed')).toBe(true))
       expect(t.run).toHaveBeenCalledTimes(1)
       expect(t.events.some((e) => e.state === 'succeeded')).toBe(false)
+    })
+
+    const FOREIGN = '0x' + 'f0'.repeat(32)
+    const OWN = '0x' + 'c4'.repeat(32)
+    /** The node's record of the first group's credit: none yet, until `settle` names the hash it indexed. */
+    const recordOf = () => {
+      let indexed: string | null = null
+      const lookup: ShellShopServices['creditRecordOf'] = async (_buyer, creditId) =>
+        indexed && creditId === 'credit-accept' ? ({ id: creditId, status: 'SETTLED', usdCents: 100, createdAt: 1, txHash: indexed } as never) : null
+      return { lookup, settle: (hash: string) => (indexed = hash) }
+    }
+    /** The first group as the executor runs it: kept, then handed off as `hash`, its checkout written to `step`, answered `status`. */
+    const runAs = (hash: string, step: 'confirmed' | 'pending', status: 'confirmed' | 'pending'): RunFn => async (deps, group) => {
+      const call = group.key.call.kind
+      deps.onCreditsCall?.(builtFor(call))
+      deps.onCreditsEnvelope?.(encodeUseCredits(argsFor(call)))
+      handedOff(deps, group, call === 'accept' ? hash : hashOf(call))
+      if (step === 'confirmed') deps.store.dispatch(group.keyId, { type: 'confirmed', txHash: call === 'accept' ? hash : hashOf(call) })
+      return { status, txHash: call === 'accept' ? hash : hashOf(call) }
+    }
+
+    it('never takes its checkout’s confirmed step as bought when the hash it was answered is another credit’s purchase', async () => {
+      const node = recordOf()
+      const t = setup({
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        run: runAs(FOREIGN, 'confirmed', 'confirmed'),
+        evidence: chainSays({ [FOREIGN]: argsFor('accept', 'credit-other'), [OWN]: argsFor('accept') }),
+        creditRecordOf: node.lookup
+      })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      // The watch looks again and again; none of those looks is a success on the confirmed step alone.
+      await vi.waitFor(() => expect(t.sleeps.length).toBeGreaterThan(3))
+      expect(t.events.some((e) => e.state === 'succeeded')).toBe(false)
+      expect(t.run).toHaveBeenCalledTimes(1)
+      // The node then indexes the credit's consumption under another hash, which is this group's own call: bought, once.
+      node.settle(OWN)
+      await vi.waitFor(() => expect(t.events.filter((e) => e.state === 'succeeded')).toHaveLength(1))
+      expect(t.events.find((e) => e.state === 'succeeded')?.items.map((i) => i.itemId)).toEqual(['7'])
+      expect(t.run).toHaveBeenCalledTimes(1)
+      expect(t.cancels).toEqual([])
+    })
+
+    it('holds a revert of the hash it was answered that is another purchase’s: nothing given back, nothing signed again', async () => {
+      const node = recordOf()
+      // The executor answers pending on a kept group's revert: its caller attributes it.
+      const t = setup({
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        run: runAs(FOREIGN, 'pending', 'pending'),
+        evidence: chainSays({ [FOREIGN]: argsFor('accept', 'credit-other'), [OWN]: argsFor('accept') }, [FOREIGN]),
+        creditRecordOf: node.lookup
+      })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await vi.waitFor(() => expect(t.sleeps.length).toBeGreaterThan(3))
+      expect(t.cancels).toEqual([])
+      expect(t.events.some((e) => e.state === 'failed' || e.state === 'succeeded')).toBe(false)
+      expect(t.shown.some((s) => s.view.step === 'failed' && s.handlers.onRetry)).toBe(false)
+      expect(t.run).toHaveBeenCalledTimes(1)
+      // Its own call, indexed by the node under its own hash, is the one purchase.
+      node.settle(OWN)
+      await vi.waitFor(() => expect(t.events.filter((e) => e.state === 'succeeded')).toHaveLength(1))
+      expect(t.run).toHaveBeenCalledTimes(1)
+      expect(t.cancels).toEqual([])
+    })
+
+    it('keeps the bytes it sends with its call, before they go', async () => {
+      const storage = memoryStorage()
+      let kept: unknown = null
+      const t = setup({
+        storage,
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        run: async (deps, group) => {
+          const call = group.key.call.kind
+          deps.onCreditsCall?.(builtFor(call))
+          expect(deps.onCreditsEnvelope?.(encodeUseCredits(argsFor(call)))).toBe(true)
+          kept = createLedger(() => storage).load(BUYER).find((r) => r.sale?.creditId === `credit-${call}`)?.sale?.envelope ?? null
+          return { status: 'failed', failure: { kind: 'rejected', message: 'You declined the signature.' }, released: [] }
+        }
+      })
+      await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await t.until('failed')
+      expect(kept).toBe(keccak256(encodeUseCredits(argsFor('accept'))))
     })
 
     it('keeps the group’s call with the Credits records, where an older build still reads the purchase', () => {

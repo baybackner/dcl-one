@@ -220,6 +220,11 @@ export type GroupCallbacks = {
   onReverted?: (info: { salts: string[] }) => void;
   /** Each group's useCredits as built, before the wallet is handed it (see OnBuilt). */
   onBuilt?: OnBuilt;
+  /**
+   * The exact bytes about to go to the wallet as the group's transaction data, right before it is handed them: false when
+   * the caller couldn't keep their identity, and then nothing is sent.
+   */
+  onDispatch?: (data: Hex) => boolean | void;
 };
 
 /** Several purchases in as few signatures as possible, group by group; returns the hashes in group order. */
@@ -230,6 +235,7 @@ export async function buyManyWithCredits(ctx: RailContext, opts: { purchases: An
   for (const group of groups) {
     const built = buildGroupUseCreditsArgs(group, ctx.buyer);
     keepBuilt(built, opts.onBuilt);
+    if (opts.onDispatch?.(built.data) === false) throw new CallNotKeptError();
     let hash: Hex;
     try {
       hash = await sendUseCredits(ctx, {
