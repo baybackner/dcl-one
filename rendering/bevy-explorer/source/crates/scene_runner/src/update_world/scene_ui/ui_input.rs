@@ -2,7 +2,7 @@ use bevy::{prelude::*, ui::FocusPolicy};
 use common::util::ModifyComponentExt;
 use dcl_component::{
     proto_components::{
-        sdk::components::{PbUiInput, PbUiInputResult},
+        sdk::components::{common::TextAlignMode, PbUiInput, PbUiInputResult},
         Color4DclToBevy,
     },
     SceneComponentId,
@@ -19,6 +19,9 @@ use crate::{
 };
 
 use super::UiLink;
+
+/// Horizontal space between a scene input's box and its text, in UI px.
+const INPUT_TEXT_INSET: f32 = 8.0;
 
 #[derive(Component, Debug)]
 pub struct UiInput(PbUiInput);
@@ -65,6 +68,23 @@ pub fn set_ui_input(
         );
         let font_size = input.0.font_size.unwrap_or(10).max(1) as f32;
         let multiline = input.0.multi_line.unwrap_or(false);
+        // an input's text defaults to middle-left (a label's to middle-center)
+        let align_self = match input
+            .0
+            .text_align
+            .map(|_| input.0.text_align())
+            .unwrap_or(TextAlignMode::TamMiddleLeft)
+        {
+            TextAlignMode::TamTopLeft
+            | TextAlignMode::TamTopCenter
+            | TextAlignMode::TamTopRight => AlignSelf::FlexStart,
+            TextAlignMode::TamMiddleLeft
+            | TextAlignMode::TamMiddleCenter
+            | TextAlignMode::TamMiddleRight => AlignSelf::Center,
+            TextAlignMode::TamBottomLeft
+            | TextAlignMode::TamBottomCenter
+            | TextAlignMode::TamBottomRight => AlignSelf::FlexEnd,
+        };
         let clear_on_submit = input.0.clear_on_submit.unwrap_or(true);
 
         let ui_entity = link.ui_entity;
@@ -129,6 +149,9 @@ pub fn set_ui_input(
                 content: input.0.value.clone().unwrap_or_default(),
                 accept_line: clear_on_submit,
                 multiline: if multiline { 2 } else { 1 },
+                // keep the text off the box's edges
+                padding: UiRect::horizontal(Val::Px(INPUT_TEXT_INSET)),
+                align_self: Some(align_self),
                 text_style: Some((
                     TextFont {
                         font: scene_fonts.face(&family, ui_core::WeightName::Regular),

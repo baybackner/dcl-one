@@ -185,63 +185,35 @@ pub fn set_ui_text(
                 .try_insert(UiTextFontPending(family));
         }
 
-        // with text nodes the axis sizes are unusual.
-        // a) if either size axis is NOT NONE, (explicit or auto), we want auto to size appropriately for the content.
-        // b) if both axes are NONE, we want to size to zero.
-        // a) - we tackle this by using a nested position-type: relative node which will size it's parent appropriately, and default the parent to Auto
-        //    - for alignment we use align-items and justify-content
-        // b) - we use a nested position-type: absolute node, and default the parent to auto
-        //    - for alignment we use align-items and justify-content as above, and we also set left/right/top/bottom to 50% if required
+        // text lays out in one of two ways, so a label sits where the scene's layout puts it:
+        // a) an entity sized on both axes (px or %) is a box the text aligns inside, by
+        //    justify-content and align-items.
+        // b) otherwise (an axis auto or unset, as react-ecs sends a label's width and height)
+        //    the text sizes the entity and flows as an ordinary child: the entity's own
+        //    justify-content and align-items place it, so a label in a start-aligned column
+        //    starts at the left edge, and the text alignment acts only inside the text's box.
 
-        let any_axis_specified = [ui_transform.size.width, ui_transform.size.height]
-            .iter()
-            .any(Option::is_some);
+        let is_set = |v: Option<Val>| matches!(v, Some(Val::Px(_) | Val::Percent(_)));
+        let fills_box = is_set(ui_transform.size.width) && is_set(ui_transform.size.height);
 
-        let inner_style = if any_axis_specified {
-            Node {
-                position_type: PositionType::Relative,
-                margin: UiRect::all(Val::Px(ui_text.font_size * 0.5)),
-                ..Default::default()
-            }
-        } else {
-            Node {
-                position_type: PositionType::Absolute,
-                left: if ui_text.h_align == JustifyText::Left {
-                    Val::Percent(50.0)
-                } else {
-                    Val::Auto
-                },
-                right: if ui_text.h_align == JustifyText::Right {
-                    Val::Percent(50.0)
-                } else {
-                    Val::Auto
-                },
-                top: if ui_text.v_align == VAlign::Top {
-                    Val::Percent(50.0)
-                } else {
-                    Val::Auto
-                },
-                bottom: if ui_text.v_align == VAlign::Bottom {
-                    Val::Percent(50.0)
-                } else {
-                    Val::Auto
-                },
-                ..Default::default()
-            }
+        let inner_style = Node {
+            position_type: PositionType::Relative,
+            margin: if fills_box {
+                UiRect::all(Val::Px(ui_text.font_size * 0.5))
+            } else {
+                UiRect::ZERO
+            },
+            ..Default::default()
         };
 
-        // we need to set size for the first inner element depending
-        // on how the outer was specified
-        let width = match ui_transform.size.width {
-            Some(Val::Px(px)) => Val::Px(px),
-            Some(Val::Percent(_)) => Val::Percent(100.0),
+        // a box (a above) takes the entity's size; content-sized text (b) takes its own
+        let box_size = |v: Option<Val>| match v {
+            Some(Val::Px(px)) if fills_box => Val::Px(px),
+            Some(Val::Percent(_)) if fills_box => Val::Percent(100.0),
             _ => Val::Auto,
         };
-        let height = match ui_transform.size.height {
-            Some(Val::Px(px)) => Val::Px(px),
-            Some(Val::Percent(_)) => Val::Percent(100.0),
-            _ => Val::Auto,
-        };
+        let width = box_size(ui_transform.size.width);
+        let height = box_size(ui_transform.size.height);
 
         let text_element = ent_cmds
             .commands()
@@ -261,9 +233,18 @@ pub fn set_ui_text(
                     },
                     width,
                     height,
-                    align_self: AlignSelf::FlexStart,
-                    // elements are horizontally centered by default
-                    margin: UiRect::horizontal(Val::Auto),
+                    // a box (a above) is horizontally centered in its entity; content-sized
+                    // text follows the entity's own flex layout (b above)
+                    align_self: if fills_box {
+                        AlignSelf::FlexStart
+                    } else {
+                        AlignSelf::Auto
+                    },
+                    margin: if fills_box {
+                        UiRect::horizontal(Val::Auto)
+                    } else {
+                        UiRect::ZERO
+                    },
                     ..Default::default()
                 },
                 UiTextMarker,

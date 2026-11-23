@@ -31,6 +31,11 @@ pub struct TextEntry {
     pub accept_line: bool,
     pub multiline: usize,
     pub retain_focus_on_submit: bool,
+    /// Space between the entry's box and its text.
+    pub padding: UiRect,
+    /// Where a single-line entry sits on its box's cross axis. `None` fills the box, with the
+    /// text at the top.
+    pub align_self: Option<AlignSelf>,
 }
 
 impl Default for TextEntry {
@@ -44,6 +49,8 @@ impl Default for TextEntry {
             accept_line: true,
             multiline: 1,
             retain_focus_on_submit: false,
+            padding: UiRect::ZERO,
+            align_self: None,
         }
     }
 }
@@ -102,12 +109,6 @@ fn update_text_entry_components(
                     .try_insert(TextEntryEntity(id));
                 let mut cmds = commands.entity(id);
                 cmds.try_insert((
-                    Node {
-                        width: Val::Percent(100.0),
-                        min_width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        ..Default::default()
-                    },
                     TextInputInactive(true),
                     TextInputCursorTimer::default(),
                     Interaction::default(),
@@ -126,7 +127,21 @@ fn update_text_entry_components(
             .map(|tev| &tev.0)
             .unwrap_or_else(|| &textbox.content);
 
+        // a single-line entry with an alignment takes its text's height and sits where asked
+        let aligned = textbox.multiline <= 1 && textbox.align_self.is_some();
         cmds.try_insert((
+            Node {
+                width: Val::Percent(100.0),
+                min_width: Val::Percent(100.0),
+                height: if aligned {
+                    Val::Auto
+                } else {
+                    Val::Percent(100.0)
+                },
+                align_self: textbox.align_self.filter(|_| aligned).unwrap_or_default(),
+                padding: textbox.padding,
+                ..Default::default()
+            },
             TextInputSettings {
                 multiline: textbox.multiline > 1,
                 retain_on_submit: !textbox.accept_line,
