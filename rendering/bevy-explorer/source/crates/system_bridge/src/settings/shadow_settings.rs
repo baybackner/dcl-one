@@ -1,14 +1,15 @@
 use bevy::{
     ecs::system::{
-        lifetimeless::{SQuery, SRes, Write},
+        lifetimeless::{SQuery, SRes, SResMut, Write},
         SystemParamItem,
     },
-    pbr::{CascadeShadowConfig, ShadowFilteringMethod},
+    pbr::{CascadeShadowConfig, DirectionalLightShadowMap, ShadowFilteringMethod},
     platform::collections::HashSet,
     prelude::*,
 };
 use common::structs::{
-    sun_cascades, AppConfig, PrimaryCameraRes, ShadowSetting, ShadowlessLight, StageLight,
+    set_sun_shadow_map_size, sun_cascades, AppConfig, PrimaryCameraRes, ShadowSetting,
+    ShadowlessLight, StageLight, SunShadowMapOverride,
 };
 
 use super::{AppSetting, EnumAppSetting, IntAppSetting};
@@ -40,6 +41,8 @@ impl AppSetting for ShadowSetting {
             ),
             Without<ShadowlessLight>,
         >,
+        SRes<SunShadowMapOverride>,
+        SResMut<DirectionalLightShadowMap>,
     );
 
     fn title() -> String {
@@ -69,13 +72,15 @@ impl AppSetting for ShadowSetting {
 
     fn apply(
         &self,
-        (config, cam_res, mut lights): SystemParamItem<Self::Param>,
+        (config, cam_res, mut lights, size_override, mut map): SystemParamItem<Self::Param>,
         mut commands: Commands,
         cameras: &HashSet<Entity>,
     ) {
-        apply_shadows(*self, config.graphics.shadow_distance, &mut lights);
+        let distance = config.graphics.shadow_distance;
+        apply_shadows(*self, distance, &mut lights);
+        set_sun_shadow_map_size(*self, distance, &size_override, &mut map);
 
-        let res = &(config, cam_res, lights);
+        let res = &(config, cam_res, lights, size_override, map);
         for &cam in cameras {
             self.apply_to_camera(res, commands.reborrow(), cam);
         }
@@ -102,8 +107,9 @@ impl AppSetting for ShadowSetting {
     }
 }
 
-// The sun's shadows for a quality and a distance (settings of their own, each applying this). A
-// stage light keeps its own cascades; a shadowless light is not queried.
+// The sun's shadows for a quality and a distance (settings of their own, each applying this and
+// the map size, `set_sun_shadow_map_size`). A stage light keeps its own cascades; a shadowless
+// light is not queried.
 fn apply_shadows(
     setting: ShadowSetting,
     distance: f32,
@@ -157,15 +163,19 @@ impl AppSetting for ShadowDistanceSetting {
             ),
             Without<ShadowlessLight>,
         >,
+        SRes<SunShadowMapOverride>,
+        SResMut<DirectionalLightShadowMap>,
     );
 
     fn apply(
         &self,
-        (config, mut lights): SystemParamItem<Self::Param>,
+        (config, mut lights, size_override, mut map): SystemParamItem<Self::Param>,
         _: Commands,
         _: &HashSet<Entity>,
     ) {
-        apply_shadows(ShadowSetting::load(&config), self.0 as f32, &mut lights);
+        let setting = ShadowSetting::load(&config);
+        apply_shadows(setting, self.0 as f32, &mut lights);
+        set_sun_shadow_map_size(setting, self.0 as f32, &size_override, &mut map);
     }
 
     fn title() -> String {

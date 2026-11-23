@@ -174,6 +174,9 @@ impl Plugin for SettingBridgePlugin {
         app.add_event::<NewCameraEvent>();
         app.add_systems(Update, handle_settings);
 
+        // the shadow settings size the sun's shadow map, with or without the renderer's plugins
+        app.init_resource::<bevy::pbr::DirectionalLightShadowMap>()
+            .init_resource::<common::structs::SunShadowMapOverride>();
         let mut schedule = Schedule::new(ApplyAppSettingsLabel);
         let config = app.world().resource::<AppConfig>().clone();
 

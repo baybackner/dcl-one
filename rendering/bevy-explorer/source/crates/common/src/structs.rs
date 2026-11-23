@@ -11,7 +11,7 @@ use alloy_core::primitives::Address;
 use bevy::{
     color::palettes,
     math::DVec3,
-    pbr::CascadeShadowConfig,
+    pbr::{CascadeShadowConfig, DirectionalLightShadowMap},
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::{primitives::Aabb, view::RenderLayers},
@@ -1337,7 +1337,7 @@ pub fn sun_cascades(setting: ShadowSetting, distance: f32) -> Option<CascadeShad
 
 /// The longest shadow distance at which Low's one cascade uses the 2048 map: there a texel covers
 /// what a 4096 texel covers at twice the distance.
-pub const SUN_SMALL_MAP_DISTANCE: f32 = 40.0;
+const SUN_SMALL_MAP_DISTANCE: f32 = 40.0;
 
 /// The sun's shadow map size, in texels along one side of each cascade's map. High's four cascades
 /// each cover a slice of the shadow distance, so 2048 is enough. Low's one cascade spreads its map
@@ -1348,6 +1348,28 @@ pub fn sun_shadow_map_size(setting: ShadowSetting, distance: f32) -> usize {
         ShadowSetting::High => 2048,
         ShadowSetting::Off | ShadowSetting::Low if distance <= SUN_SMALL_MAP_DISTANCE => 2048,
         ShadowSetting::Off | ShadowSetting::Low => 4096,
+    }
+}
+
+/// The sun's shadow map size set live by `/shadow_map`, in place of the shadow settings'
+/// (`sun_shadow_map_size`).
+#[derive(Resource, Default)]
+pub struct SunShadowMapOverride(pub Option<usize>);
+
+/// Puts the sun's shadow map at the `/shadow_map` override, or else at the size for the shadow
+/// quality and distance. The shadow settings and `/shadow_map` each call this when they change.
+pub fn set_sun_shadow_map_size(
+    setting: ShadowSetting,
+    distance: f32,
+    size_override: &SunShadowMapOverride,
+    map: &mut ResMut<DirectionalLightShadowMap>,
+) {
+    let size = size_override
+        .0
+        .unwrap_or_else(|| sun_shadow_map_size(setting, distance));
+    // only write when it changes: a write reallocates every cascade's map
+    if map.size != size {
+        map.size = size;
     }
 }
 
@@ -2754,6 +2776,35 @@ mod tests {
             sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance),
             2048
         );
+    }
+
+    #[test]
+    fn the_sun_shadow_map_follows_the_settings_until_it_is_overridden() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        fn set(world: &mut World, setting: ShadowSetting, distance: f32) -> usize {
+            world
+                .run_system_once(
+                    move |size_override: Res<SunShadowMapOverride>,
+                          mut map: ResMut<DirectionalLightShadowMap>| {
+                        set_sun_shadow_map_size(setting, distance, &size_override, &mut map);
+                        map.size
+                    },
+                )
+                .unwrap()
+        }
+
+        let mut world = World::new();
+        world.insert_resource(DirectionalLightShadowMap { size: 2048 });
+        world.init_resource::<SunShadowMapOverride>();
+        // a saved Low at 100 m starts on the large map
+        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 4096);
+        assert_eq!(set(&mut world, ShadowSetting::High, 100.0), 2048);
+        // an override outlasts a change of the settings, and its reset applies at once
+        world.resource_mut::<SunShadowMapOverride>().0 = Some(1024);
+        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 1024);
+        world.resource_mut::<SunShadowMapOverride>().0 = None;
+        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 4096);
     }
 
     #[test]

@@ -10,8 +10,9 @@ use bevy::{
 };
 use bevy_console::ConsoleCommand;
 use common::structs::{
-    sun_shadow_map_size, AppConfig, FogSetting, LandscapeDistance, LensFlare, PrimaryCamera,
-    SceneLoadDistance, SessionGraphics, StageLight, TimeOfDay,
+    set_sun_shadow_map_size, sun_shadow_map_size, AppConfig, FogSetting, LandscapeDistance,
+    LensFlare, PrimaryCamera, SceneLoadDistance, SessionGraphics, StageLight, SunShadowMapOverride,
+    TimeOfDay,
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use serde_json::json;
@@ -22,7 +23,7 @@ use crate::{
     sky_envmap::{SkyAmbient, SkyEnvmapSettings},
     trees::Tree,
     upscale::{Compositor, SceneTarget},
-    user_cover, CloudCover, FogDensity, ShadowBiasOverride, SunShadowMapOverride, SUN_SHADOW_BIAS,
+    user_cover, CloudCover, FogDensity, ShadowBiasOverride, SUN_SHADOW_BIAS,
 };
 
 /// The Lighting section's action that puts the fog density back to the sky preset's.
@@ -61,6 +62,7 @@ pub(super) struct VisualsDebugPanelPlugin;
 
 impl Plugin for VisualsDebugPanelPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<SunShadowMapOverride>();
         app.insert_resource(LandscapeLayers {
             ground: true,
             trees: true,
@@ -593,6 +595,7 @@ fn sun_shadow_map(
     mut cmd: ConsoleCommand<SunShadowMap>,
     config: Res<AppConfig>,
     mut size_override: ResMut<SunShadowMapOverride>,
+    mut map: ResMut<DirectionalLightShadowMap>,
 ) {
     if let Some(Ok(SunShadowMap { size, .. })) = cmd.take() {
         if size.is_some_and(|size| !(256..=8192).contains(&size) || !size.is_power_of_two()) {
@@ -601,10 +604,13 @@ fn sun_shadow_map(
         }
         size_override.0 = size;
         let graphics = &config.graphics;
-        let size = size.unwrap_or_else(|| {
-            sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance)
-        });
-        cmd.reply_ok(format!("sun shadow map {size} texels"));
+        set_sun_shadow_map_size(
+            graphics.shadow_settings,
+            graphics.shadow_distance,
+            &size_override,
+            &mut map,
+        );
+        cmd.reply_ok(format!("sun shadow map {} texels", map.size));
     }
 }
 
