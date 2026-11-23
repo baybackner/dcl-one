@@ -23,9 +23,6 @@ fn visit_dirs(writer: &mut BufWriter<File>, dir: &Path, base_dir: &Path) -> std:
                 {
                     continue;
                 }
-                if other_target_asset(&relative_path) {
-                    continue;
-                }
                 // An LFS pointer would compile and be silently wrong at runtime.
                 let mut head = Vec::new();
                 File::open(&path)?
@@ -51,13 +48,6 @@ fn preview_asset(relative_path: &str) -> bool {
     relative_path.starts_with("shaders/")
         || relative_path.starts_with("avatars/")
         || relative_path == "animations/idle.glb"
-}
-
-/// Whether a file belongs to the other target: the cloud strips ship at two sizes, web's under
-/// `sky/web/` and native's under `sky/native/`.
-fn other_target_asset(relative_path: &str) -> bool {
-    let web = env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|arch| arch == "wasm32");
-    relative_path.starts_with(if web { "sky/native/" } else { "sky/web/" })
 }
 
 fn main() -> std::io::Result<()> {
