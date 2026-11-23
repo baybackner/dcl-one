@@ -29,3 +29,12 @@
   width: 100%;
   max-width: 420px;
 }
+
+.backdrop {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--dcl-radius-lg);
+}

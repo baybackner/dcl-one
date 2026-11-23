@@ -15,7 +15,7 @@ vi.hoisted(() =>
 );
 
 vi.mock("../../components/chrome/SitesLayout", () => ({ default: ({ children }: { children?: ReactNode }) => <>{children}</> }));
-vi.mock("@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground", () => ({
+vi.mock("@dcl/one-ui/components/AnimatedBackground/AnimatedBackground", () => ({
   AnimatedBackground: () => <div data-testid="animated-background" />,
 }));
 

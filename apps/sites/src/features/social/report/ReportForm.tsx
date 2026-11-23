@@ -3,7 +3,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState, type ChangeEvent,
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 
 import { Button, CheckboxLabel, InputWebCreatorTools, WebSelect, WebTextarea } from "@dcl/one-ui";
-import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
+import { AnimatedBackground } from "@dcl/one-ui/components/AnimatedBackground/AnimatedBackground";
 import { GeneralClose, GeneralDecentralandColor } from "@dcl/one-ui/foundations/icons";
 import SitesLayout from "../../components/chrome/SitesLayout";
 

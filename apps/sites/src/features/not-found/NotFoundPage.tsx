@@ -4,7 +4,7 @@
 import { Link } from "react-router";
 
 import { Button } from "@dcl/one-ui";
-import { AnimatedBackground } from "@dcl/one-ui/apps/sites/shared/AnimatedBackground/AnimatedBackground";
+import { AnimatedBackground } from "@dcl/one-ui/components/AnimatedBackground/AnimatedBackground";
 
 import { GeneralDecentralandColor } from "@dcl/one-ui/foundations/icons";
 import notFoundAvatar from "@dcl/one-ui/apps/sites/assets/errors/not-found-avatar.webp";

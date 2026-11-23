@@ -10,7 +10,9 @@ import "./livepromo.css";
 const SETTLE_MS = 700;
 
 const WearablePreview = lazy(() => import("../../../wearable-preview/WearablePreview"));
-const AnimatedBackground = lazy(() => import("./animated-background/AnimatedBackground"));
+const AnimatedBackground = lazy(() =>
+  import("@dcl/one-ui/components/AnimatedBackground/AnimatedBackground").then((m) => ({ default: m.AnimatedBackground })),
+);
 
 type Props = {
   to: string;

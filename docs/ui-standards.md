@@ -274,6 +274,7 @@ library/ui/
     layout/             responsive layout values
     spacing/            spacing and corner-radius scales
     icons/              shared icon assets and exports
+  assets/               images shared components draw, with their license
   components/
     Button/
       Button.tsx
