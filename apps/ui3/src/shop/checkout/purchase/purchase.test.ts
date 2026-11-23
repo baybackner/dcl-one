@@ -35,7 +35,7 @@ import {
 import { getCouponManagerForTrade } from "../lib/marketplace";
 import { ASSET_TYPE, type ListingCoupon } from "./encoding";
 import { reviewCart, resolveLine, partitionReservations, couponForTrade, classifyTrade, classifyStoreMint, isLineBuyable, tradeManaPrice, type ResolvedLine, type SettlementResolvers } from "./cart";
-import { AFTER_PENDING, resumeCheckout, runGroup, runGroups, splitPriceOf, watchGroup, type CheckoutDeps } from "./executor";
+import { ACCOUNT_READ_MS, AFTER_PENDING, resumeCheckout, runGroup, runGroups, splitPriceOf, watchGroup, type CheckoutDeps } from "./executor";
 import { computePaymentOptions, distributeCreditsAcrossUnits, findOption, hasPayableOption } from "./payment-options";
 import type { RailContext } from "./rail";
 import { createSpendGuard } from "@shop/checkout/purchase/spend-guard";
@@ -847,6 +847,65 @@ describe("a kept credits group the wallet was handed", () => {
       expect(h.wallet.sent).toHaveLength(1);
       expect(h.relay.posts).toHaveLength(0);
     }
+  });
+
+  it("takes the relay's word that the account is a contract: a later read that fails or says empty changes nothing", async () => {
+    for (const later of [async () => { throw new Error("rpc down"); }, async () => "0x"] as const) {
+      const h = await harness();
+      let reads = 0;
+      // The relay's read finds bytecode; any read after it fails, or answers empty.
+      h.chain.code = (async () => (++reads === 1 ? "0x6080604052" : later())) as typeof h.chain.code;
+      const calls: string[] = [];
+      const deps = {
+        ...h.deps,
+        onCreditsCall: () => void calls.push("kept"),
+        onCreditsEnvelope: () => void calls.push("envelope"),
+        onCreditsUnkept: () => void calls.push("unkept"),
+      };
+      await runGroup(deps, h.group, h.resolved);
+      expect(calls).toEqual(["kept", "unkept"]);
+      expect(reads).toBe(1);
+      expect(h.wallet.sent).toHaveLength(1);
+    }
+  });
+
+  it("stops before the wallet when its account can't be read, gives the credit back, and lets it be tried again", async () => {
+    const h = await harness();
+    h.chain.code = async () => {
+      throw new Error("rpc down");
+    };
+    const calls: string[] = [];
+    const deps = { ...h.deps, ctx: { ...h.deps.ctx, gasless: false }, onCreditsCall: () => void calls.push("kept"), onCreditsEnvelope: () => void calls.push("envelope"), onCreditsUnkept: () => void calls.push("unkept") };
+    // Not refused for good: an error, which the shell offers TRY AGAIN for.
+    expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "failed", failure: { kind: "error" } });
+    expect(calls).toEqual([]);
+    expect(h.wallet.sent).toHaveLength(0);
+    expect(cancels(h)).toBe(1);
+  });
+
+  it("stops the same way when the read of its account doesn't answer in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = await harness();
+      h.chain.code = () => new Promise(() => {});
+      const deps = { ...h.deps, ctx: { ...h.deps.ctx, gasless: false }, onCreditsCall: () => true, onCreditsEnvelope: () => true, onCreditsUnkept: () => true };
+      const running = runGroup(deps, h.group, h.resolved);
+      await vi.advanceTimersByTimeAsync(ACCOUNT_READ_MS);
+      expect(await running).toMatchObject({ status: "failed", failure: { kind: "error" } });
+      expect(h.wallet.sent).toHaveLength(0);
+      expect(cancels(h)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an account read as empty as the buyer's own: kept, its bytes too", async () => {
+    const h = await harness();
+    const calls: string[] = [];
+    const deps = { ...h.deps, ctx: { ...h.deps.ctx, gasless: false }, onCreditsCall: () => void calls.push("kept"), onCreditsEnvelope: () => void calls.push("envelope"), onCreditsUnkept: () => void calls.push("unkept") };
+    await runGroup(deps, h.group, h.resolved);
+    expect(calls).toEqual(["kept", "envelope"]);
+    expect(h.wallet.sent).toHaveLength(1);
   });
 
   it("sends nothing when the caller couldn't unkeep a smart wallet's purchase", async () => {

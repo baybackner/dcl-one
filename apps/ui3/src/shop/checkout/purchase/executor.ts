@@ -123,10 +123,33 @@ function progressOf(store: CartStore, keyId: string): GroupProgress | null {
   return store.getSnapshot().checkout?.groups.find((g) => g.keyId === keyId) ?? null;
 }
 
-/** Whether `ctx.buyer` is a contract account on `chainId` (a read that fails is taken as not, as the relay takes it). */
-async function contractAccount(ctx: RailContext, chainId: number): Promise<boolean> {
-  const code = await ctx.reader.code(chainId as Parameters<RailContext["reader"]["code"]>[0], ctx.buyer).catch(() => "0x");
-  return !!code && code !== "0x";
+/** How long a read of the buyer's account may take before a kept group stops, nothing sent. */
+export const ACCOUNT_READ_MS = 10_000;
+
+/** Thrown before the wallet is handed anything when what the buyer's account is couldn't be read: nothing was sent. */
+class AccountUnreadError extends Error {
+  constructor() {
+    super("We couldn't check your wallet's account, so nothing was sent and nothing was charged. Try again.");
+    this.name = "AccountUnreadError";
+  }
+}
+
+/**
+ * What `ctx.buyer`'s account is on `chainId`: `eoa` only for bytecode read as empty, `contract` for any other bytecode,
+ * `unknown` for a read that fails, answers something else, or takes longer than ACCOUNT_READ_MS.
+ */
+async function accountKind(ctx: RailContext, chainId: number): Promise<"eoa" | "contract" | "unknown"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), ACCOUNT_READ_MS)));
+  try {
+    const code = await Promise.race([ctx.reader.code(chainId as Parameters<RailContext["reader"]["code"]>[0], ctx.buyer), late]);
+    if (typeof code !== "string" || !/^0x[0-9a-fA-F]*$/.test(code)) return "unknown";
+    return code === "0x" ? "eoa" : "contract";
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -250,6 +273,8 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
   };
   // The fee-free way was tried and couldn't run, so the wallet's own transaction is its fallback.
   let fellBack = false;
+  // The relay found the buyer's account to be a contract (a smart wallet).
+  let smartWallet = false;
   // The wallet was handed the group's transaction (not the relay's signature): from here it may have sent it.
   let walletHandedOff = false;
   // Why it couldn't run, when the relay said (its daily limits), for the buyer to read beside the fallback's failure.
@@ -280,6 +305,8 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
         const canFallBack = !split && isGaslessUnavailable(e) && e.reason !== "relayer-unreachable" && canPayGasItself(ctx.walletKind) && txHash === null;
         if (!canFallBack) throw e;
         fellBack = true;
+        // The relay read the account and found it a contract: that answer stands, it is never read again.
+        if (e.reason === "contract-account") smartWallet = true;
         feeFreeNote = relayLimitText(e);
         if (handedOff) {
           // The relay parsed our request and refused it: provably not broadcast. The direct rail is a new hand-off.
@@ -293,10 +320,15 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
     }
     if (!settled) {
       // A contract account's transaction is a call to itself, which carries no useCredits to read: such a group is
-      // followed as any Credits group is, never kept by a call it can't be found by.
-      if (kept && (await contractAccount(ctx, chainId))) {
-        if (deps.onCreditsUnkept?.() === false) throw new CallNotKeptError();
-        kept = false;
+      // followed as any Credits group is, never kept by a call it can't be found by. What the account is must be known
+      // before the wallet is handed anything: the relay's answer, else a read that says so; one that can't, stops it.
+      if (kept) {
+        const account = smartWallet ? "contract" : await accountKind(ctx, chainId);
+        if (account === "unknown") throw new AccountUnreadError();
+        if (account === "contract") {
+          if (deps.onCreditsUnkept?.() === false) throw new CallNotKeptError();
+          kept = false;
+        }
       }
       await buyManyWithCredits(ctx, {
         purchases,
@@ -317,6 +349,13 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
     // The caller couldn't keep the call, or its bytes, before they went: nothing was sent, and the credit goes back.
     if (e instanceof CallNotKeptError && txHash === null) {
       const failure: GroupFailure = { kind: "refused", message: e.message };
+      dispatchSafe(store, keyId, { type: "failed", failure });
+      return { status: "failed", failure, released: await release(deps, [creditId]) };
+    }
+    // What the account is couldn't be read before the wallet was handed anything: nothing was sent, the credit goes back,
+    // and trying again reads it anew.
+    if (e instanceof AccountUnreadError && txHash === null) {
+      const failure: GroupFailure = { kind: "error", message: e.message };
       dispatchSafe(store, keyId, { type: "failed", failure });
       return { status: "failed", failure, released: await release(deps, [creditId]) };
     }
