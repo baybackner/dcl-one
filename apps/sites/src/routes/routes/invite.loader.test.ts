@@ -30,7 +30,9 @@ const status = async (referrer?: string) => {
 };
 
 describe("Invite loader", () => {
-  beforeEach(() => loadInviteReferral.mockReset());
+  beforeEach(() => {
+    loadInviteReferral.mockReset();
+  });
 
   describe("when the path names no referrer", () => {
     it("should answer 404 without reading a profile", async () => {
