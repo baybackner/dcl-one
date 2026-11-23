@@ -203,7 +203,15 @@ fn fragment(
 
     let view_z = -view_transformations::depth_ndc_to_view_z(in.position.z);
 
-    if (mesh_tag & #{OUTLINE_MESH_TAG}) != 0u {
+    // the outline finds its edges in the depth and normal prepass, which only opaque and
+    // alpha-tested meshes write: under a blended fragment the prepass holds what lies behind it,
+    // so a blended mesh would trace the edges of the scene behind it
+    let alpha_mode = pbr_input.material.flags & bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_RESERVED_BITS;
+    let in_prepass = alpha_mode == bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_OPAQUE
+        || alpha_mode == bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_MASK
+        || alpha_mode == bevy_pbr::pbr_types::STANDARD_MATERIAL_FLAGS_ALPHA_MODE_ALPHA_TO_COVERAGE;
+
+    if (mesh_tag & #{OUTLINE_MESH_TAG}) != 0u && in_prepass {
         // the avatar outline
         out.color = toon_outline(
             in.position,
