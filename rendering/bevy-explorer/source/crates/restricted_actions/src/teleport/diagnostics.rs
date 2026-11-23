@@ -64,3 +64,69 @@ fn teleport_state(
         .to_string(),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{mpsc, Arc};
+
+    use bevy_console::{ConsoleCommandEntered, PrintConsoleLine};
+    use serde_json::{json, Value};
+
+    use super::*;
+
+    /// What `/teleport_state` answers for a player with these components and this landing
+    /// target of a realm change.
+    fn state(player: impl Bundle, realm_target: RealmInitialLocation) -> Value {
+        let mut app = App::new();
+        app.add_event::<ConsoleCommandEntered>()
+            .add_event::<PrintConsoleLine>()
+            .insert_resource(realm_target)
+            .add_systems(Update, teleport_state);
+        app.world_mut().spawn((PrimaryUser::default(), player));
+        let (tx, rx) = mpsc::channel();
+        app.world_mut().send_event(ConsoleCommandEntered {
+            command_name: "/teleport_state".into(),
+            args: vec![],
+            responder: Some(Arc::new(move |result| tx.send(result).unwrap())),
+        });
+        app.update();
+        serde_json::from_str(&rx.try_recv().unwrap().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_landing_under_way_shows_the_spawn_point_it_looks_for() {
+        let report = state(
+            OutOfWorld {
+                spawn_point: Some("roof".to_owned()),
+            },
+            RealmInitialLocation::None,
+        );
+        assert_eq!(report["pending"], json!("roof"));
+        assert!(report["last"].is_null());
+    }
+
+    #[test]
+    fn a_realm_change_yet_to_land_shows_the_spawn_point_it_will_look_for() {
+        let report = state(
+            (),
+            RealmInitialLocation::Parcel {
+                parcel: IVec2::new(3, 4),
+                spawn_point: Some("door".to_owned()),
+            },
+        );
+        assert_eq!(report["pending"], json!("door"));
+    }
+
+    #[test]
+    fn the_last_named_landing_stays_with_whether_its_scene_had_the_spawn_point() {
+        let report = state(
+            LastNamedLanding {
+                name: "cellar".to_owned(),
+                found: false,
+            },
+            RealmInitialLocation::None,
+        );
+        assert!(report["pending"].is_null());
+        assert_eq!(report["last"], json!({ "name": "cellar", "found": false }));
+    }
+}
