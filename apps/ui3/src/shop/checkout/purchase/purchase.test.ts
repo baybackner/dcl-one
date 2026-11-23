@@ -758,6 +758,43 @@ describe("a credits group the relay refuses", () => {
   });
 });
 
+describe("a kept credits group the wallet was handed", () => {
+  const kept = (h: Harness, over: Partial<CheckoutDeps["ctx"]> = {}) => ({ ...h.deps, ctx: { ...h.deps.ctx, ...over }, onCreditsCall: () => true, onCreditsEnvelope: () => true });
+  const cancels = (h: Harness) => h.shop.log.filter((r) => r.name === "cancelCreditAuthorizations").length;
+
+  it("sent, then a disconnect before its hash: held without a hash, its credit kept, nothing sent again", async () => {
+    // Its own transaction from the start, and the wallet's fallback after the relay proved it sent nothing.
+    const direct = await harness();
+    direct.wallet.next = "lost";
+    const fallback = await harness({ relay: "refuse", refuseStatus: 503 });
+    fallback.wallet.next = "lost";
+    for (const [h, deps] of [
+      [direct, kept(direct, { gasless: false })],
+      [fallback, kept(fallback)],
+    ] as const) {
+      expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "pending", txHash: null });
+      expect(h.wallet.sent).toHaveLength(1);
+      expect(cancels(h)).toBe(0);
+      expect(h.shop.log.filter((r) => r.name === "authorizeCreditBatch")).toHaveLength(1);
+    }
+  });
+
+  it("an explicit refusal in the wallet still fails it and gives its credit back", async () => {
+    const h = await harness();
+    h.wallet.next = "reject";
+    expect(await runGroup(kept(h, { gasless: false }), h.group, h.resolved)).toMatchObject({ status: "failed", failure: { kind: "rejected" } });
+    expect(h.wallet.sent).toHaveLength(0);
+    expect(cancels(h)).toBe(1);
+  });
+
+  it("a group nobody kept keeps today's answer to the same disconnect", async () => {
+    const h = await harness();
+    h.wallet.next = "lost";
+    const result = await runGroup({ ...h.deps, ctx: { ...h.deps.ctx, gasless: false } }, h.group, h.resolved);
+    expect(result.status).toBe("failed");
+  });
+});
+
 describe("a relayed MANA group the relay answers", () => {
   const approved = (h: Harness) => h.chain.allowances.set(`137:${BOOK.buyer}:${BOOK.marketplace.contract}`, 10n ** 20n);
 

@@ -155,6 +155,17 @@ describe('the shell purchase on the real rails', () => {
     expect(r.relay.posts).toHaveLength(0)
   })
 
+  it('holds a purchase the wallet sent and then dropped before its hash: nothing given back, nothing sent again', async () => {
+    const r = rails({ trusted: DEDICATED, kind: 'web3', gasless: false })
+    r.wallet.next = 'lost'
+    await r.buy()
+    await r.until('pending')
+    expect(r.wallet.sent).toHaveLength(1)
+    expect(r.shop.log.some((q) => q.name === 'cancelCreditAuthorizations')).toBe(false)
+    expect(r.shown.some((s) => s.view.step === 'failed')).toBe(false)
+    expect(r.events.some((e) => e.state === 'failed' || e.state === 'succeeded')).toBe(false)
+  })
+
   it('refuses a credit issued for a manager the deployment doesn’t trust, and gives the credit back', async () => {
     const r = rails({ trusted: REGISTRY, kind: 'managed' })
     await r.buy()

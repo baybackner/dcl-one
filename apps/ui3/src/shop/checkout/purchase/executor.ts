@@ -116,6 +116,12 @@ function progressOf(store: CartStore, keyId: string): GroupProgress | null {
   return store.getSnapshot().checkout?.groups.find((g) => g.keyId === keyId) ?? null;
 }
 
+/** A provider's refusal of the request itself (EIP-1193 4100 unauthorized, 4200 unsupported): it never went to the chain. */
+function refusedUnsent(e: unknown): boolean {
+  const code = e && typeof e === "object" ? (e as { code?: unknown }).code : undefined;
+  return code === 4100 || code === 4200;
+}
+
 function failureFor(e: unknown, kind?: GroupFailure["kind"]): GroupFailure {
   if (kind) return { kind, message: friendlyError(e, FALLBACK, { sale: true }) };
   if (isRejection(e) || isSignatureDeclined(e)) return { kind: "rejected", message: friendlyError(e, FALLBACK) };
@@ -229,6 +235,8 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
   };
   // The fee-free way was tried and couldn't run, so the wallet's own transaction is its fallback.
   let fellBack = false;
+  // The wallet was handed the group's transaction (not the relay's signature): from here it may have sent it.
+  let walletHandedOff = false;
   // Why it couldn't run, when the relay said (its daily limits), for the buyer to read beside the fallback's failure.
   let feeFreeNote: string | null = null;
   try {
@@ -273,7 +281,10 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
         purchases,
         onBuilt,
         ...(kept && deps.onCreditsEnvelope ? { onDispatch: keepEnvelope } : {}),
-        onHandoff: handoff,
+        onHandoff: () => {
+          walletHandedOff = true;
+          handoff();
+        },
         onBroadcast: ({ txHash: h }) => broadcast(h),
       });
     }
@@ -303,6 +314,13 @@ async function runCreditsGroup(deps: CheckoutDeps, group: CartGroup, lines: Reso
       return { status: "pending", txHash: null };
     }
     if (txHash) return { status: "pending", txHash };
+    // A kept group the wallet was handed, answered without a hash and without a refusal that proves nothing was sent (the
+    // buyer's 4001, or a provider's 4100/4200, which refuse the request itself): a disconnect after it sent, a timeout, it may
+    // be on its way. Held, its credit kept, for its caller to find out by the node's record.
+    if (kept && walletHandedOff && !isRejection(e) && !isSignatureDeclined(e) && !refusedUnsent(e)) {
+      guard.unobservable(creditId);
+      return { status: "pending", txHash: null };
+    }
     const failure = handedOff ? { ...failureFor(e), kind: "rejected" as const } : failureFor(e);
     if (isWrongNetworkError(e)) {
       failure.message = friendlyError(e, FALLBACK);

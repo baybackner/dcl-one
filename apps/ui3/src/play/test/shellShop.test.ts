@@ -1495,18 +1495,61 @@ describe('a purchase of several items (the cart)', () => {
       expect(kept).toBe(keccak256(encodeUseCredits(argsFor('accept'))))
     })
 
-    it('keeps the group’s call with the Credits records, where an older build still reads the purchase', () => {
+    const keysIn = (storage: Storage) => Array.from({ length: storage.length }, (_, i) => storage.key(i) ?? '')
+    /** The prefixes a build that doesn't find a Credits purchase out by its call reads records under (4c29f0cca and before). */
+    const OLDER = ['dcl-inworld-shop:record:v1:', 'dcl-inworld-shop:record:mana-v1:', 'dcl-inworld-shop:record:split-v1:']
+
+    it('moves the group’s record out of an older build’s reach once its call is kept, before anything is signed', async () => {
+      const storage = memoryStorage()
+      const seen: { before: string[]; after: string[] }[] = []
+      const t = setup({
+        storage,
+        items: ITEMS,
+        offers: mixed,
+        resolvers: trades,
+        evidence: chainSays({ [FOREIGN]: argsFor('accept', 'credit-other') }),
+        run: async (deps, group) => {
+          const call = group.key.call.kind
+          const before = keysIn(storage).filter((k) => k.includes(':record:'))
+          deps.onCreditsCall?.(builtFor(call))
+          deps.onCreditsEnvelope?.(encodeUseCredits(argsFor(call)))
+          seen.push({ before, after: keysIn(storage).filter((k) => k.includes(':record:')) })
+          // Then handed off and written confirmed, for a hash that is another credit's purchase.
+          handedOff(deps, group, FOREIGN)
+          deps.store.dispatch(group.keyId, { type: 'confirmed', txHash: FOREIGN })
+          return { status: 'confirmed', txHash: FOREIGN }
+        }
+      })
+      const { operation } = await t.checkout('7', '8')
+      ;(await t.until('confirm')).handlers.onConfirm?.()
+      await vi.waitFor(() => expect(t.sleeps.length).toBeGreaterThan(1))
+      // Before its call was kept, a plain Credits record; right after, only the kept one.
+      expect(seen[0]!.before.some((k) => k.startsWith(`dcl-inworld-shop:record:v1:${BUYER}:`) && k.endsWith(operation))).toBe(true)
+      expect(seen[0]!.after.filter((k) => k.endsWith(operation))).toEqual([`dcl-inworld-shop:record:kept-v1:${BUYER}:${operation}`])
+      // The pending purchase, confirmed step and all, is nowhere an older build reads.
+      expect(keysIn(storage).filter((k) => k.endsWith(operation) && OLDER.some((p) => k.startsWith(p)))).toEqual([])
+      // This build still reads it, with its call.
+      const record = createLedger(() => storage).load(BUYER).find((r) => r.id === operation)
+      expect(record?.sale?.creditId).toBe('credit-accept')
+      expect(record?.state).not.toBe('succeeded')
+    })
+
+    it('still reads a Credits purchase kept before calls were, under the Credits records, and never a malformed call', () => {
       const storage = memoryStorage()
       const ledger = createLedger(() => storage)
+      const base = { id: 'abcdef01-0002', buyer: BUYER, items: [{ contract: BOOK.collection, itemId: '8', quantity: 1 }], state: 'pending' as const, createdAt: 1, updatedAt: 2 }
+      // An operation an earlier build kept: no call, under the Credits records.
+      storage.setItem(`dcl-inworld-shop:record:v1:${BUYER}:${base.id}`, JSON.stringify(base))
+      expect(ledger.load(BUYER).find((r) => r.id === base.id)).toMatchObject({ state: 'pending' })
+      expect(ledger.load(BUYER).find((r) => r.id === base.id)?.sale).toBeUndefined()
+      // Kept with its call now: it moves to the kept records, and the Credits copy goes.
       const args = argsFor('storeBuy')
       const sale = { buyer: BUYER, chainId: 137, manager: TRUSTED.address, creditId: 'credit-storeBuy', creditWei: '900', creditValueWei: '1000', gapWei: '0', target: args.externalCall.target, selector: args.externalCall.selector, callData: args.externalCall.data }
-      const base = { id: 'abcdef01-0002', buyer: BUYER, items: [{ contract: BOOK.collection, itemId: '8', quantity: 1 }], state: 'pending' as const, createdAt: 1, updatedAt: 2 }
       expect(ledger.save({ ...base, sale })).toBe(true)
-      const keys = Array.from({ length: storage.length }, (_, i) => storage.key(i) ?? '')
-      expect(keys.filter((k) => k.endsWith(base.id))).toEqual([`dcl-inworld-shop:record:v1:${BUYER}:${base.id}`])
+      expect(keysIn(storage).filter((k) => k.endsWith(base.id))).toEqual([`dcl-inworld-shop:record:kept-v1:${BUYER}:${base.id}`])
       expect(ledger.load(BUYER).find((r) => r.id === base.id)?.sale).toEqual(sale)
-      // A call that isn’t one is never read back as the purchase's.
-      expect(ledger.save({ ...base, id: 'abcdef01-0003', sale: { ...sale, creditValueWei: 'lots' } })).toBe(true)
+      // A call that isn’t one is never read back as the purchase’s.
+      storage.setItem(`dcl-inworld-shop:record:kept-v1:${BUYER}:abcdef01-0003`, JSON.stringify({ ...base, id: 'abcdef01-0003', sale: { ...sale, creditValueWei: 'lots' } }))
       expect(ledger.load(BUYER).some((r) => r.id === 'abcdef01-0003')).toBe(false)
     })
 

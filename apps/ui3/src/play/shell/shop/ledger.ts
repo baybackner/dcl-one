@@ -60,9 +60,10 @@ export interface OperationRecord {
    */
   split?: SplitSale
   /**
-   * Paid by its Credits alone: its group's useCredits as built, kept before it was signed. Only an execution carrying exactly
-   * these terms counts as this purchase when it advances a checkout to its next part: a successful receipt for the hash the
-   * relay answered isn't enough on its own. Kept with the Credits records: it changes nothing of where a record lives.
+   * Paid by its Credits alone: its group's useCredits as built (and the bytes it sent), kept before it was signed. Only an
+   * execution carrying exactly these terms counts as this purchase: a successful receipt for the hash it was answered, its
+   * checkout's confirmed step or its credit's SETTLED aren't enough on their own. Such a record lives apart from the Credits
+   * records (`record:kept-v1`): a build that doesn't read the terms would take those for the purchase.
    */
   sale?: SplitSale
   createdAt: number
@@ -77,10 +78,16 @@ const manaKey = (buyer: string, id: string): string => manaPrefix(buyer) + id
 /** A purchase paid with Credits and MANA together lives apart too: a build that doesn't know splits never reads it. */
 const splitPrefix = (buyer: string): string => `${NS}:record:split-v1:${buyer}:`
 const splitKey = (buyer: string, id: string): string => splitPrefix(buyer) + id
+/**
+ * A Credits purchase kept with its call lives apart as well: a build that doesn't find a purchase out by its own execution
+ * never reads it (it would take its checkout's confirmed step for the purchase).
+ */
+const keptPrefix = (buyer: string): string => `${NS}:record:kept-v1:${buyer}:`
+const keptKey = (buyer: string, id: string): string => keptPrefix(buyer) + id
 /** The key a record belongs under, by how it pays, and the keys it must not be left under. */
 const keysOf = (record: OperationRecord & { buyer: string }): { key: string; others: string[] } => {
-  const all = { mana: manaKey(record.buyer, record.id), split: splitKey(record.buyer, record.id), credits: recordKey(record.buyer, record.id) }
-  const kind = record.mana ? 'mana' : record.split ? 'split' : 'credits'
+  const all = { mana: manaKey(record.buyer, record.id), split: splitKey(record.buyer, record.id), kept: keptKey(record.buyer, record.id), credits: recordKey(record.buyer, record.id) }
+  const kind = record.mana ? 'mana' : record.split ? 'split' : record.sale ? 'kept' : 'credits'
   return { key: all[kind], others: Object.entries(all).filter(([k]) => k !== kind).map(([, v]) => v) }
 }
 const opPrefix = (id: string): string => `${NS}:operation:v1:${id}:`
@@ -196,8 +203,9 @@ export function createLedger(storage: () => Storage | null): Ledger {
       const raw = s.getItem(key)
       const v = raw ? upgrade(JSON.parse(raw) as unknown) : null
       if (!isRecord(v, buyer) || v.id !== id) return null
-      // Under the prefix its payment belongs to only: MANA under MANA's, a split under the split's, else the Credits one.
-      const prefix = v.mana !== undefined ? manaPrefix(buyer) : v.split !== undefined ? splitPrefix(buyer) : recordPrefix(buyer)
+      // Under the prefix its payment belongs to only: MANA under MANA's, a split under the split's, a Credits purchase kept with
+      // its call under the kept one, else the Credits one.
+      const prefix = v.mana !== undefined ? manaPrefix(buyer) : v.split !== undefined ? splitPrefix(buyer) : v.sale !== undefined ? keptPrefix(buyer) : recordPrefix(buyer)
       return key.startsWith(prefix) ? v : null
     } catch {
       return null
@@ -214,6 +222,9 @@ export function createLedger(storage: () => Storage | null): Ledger {
     // A split's record holds its sale's terms from before it was signed: it is the purchase, whatever a Credits copy says.
     const split = parse(s, splitKey(buyer, id), buyer, id)
     if (split) return split
+    // So does a Credits purchase kept with its call: a plain Credits copy beside it is older, or another build's.
+    const kept = parse(s, keptKey(buyer, id), buyer, id)
+    if (kept) return kept
     const credits = parse(s, recordKey(buyer, id), buyer, id)
     if (!mana || !credits) return mana ?? credits
     if (mana.mana?.sends.some((x) => x.stage === 'dispatched')) return mana
@@ -227,7 +238,7 @@ export function createLedger(storage: () => Storage | null): Ledger {
       const ids = new Set<string>()
       for (let i = 0; i < s.length; i++) {
         const key = s.key(i)
-        for (const prefix of [recordPrefix(buyer), manaPrefix(buyer), splitPrefix(buyer)]) if (key?.startsWith(prefix)) ids.add(key.slice(prefix.length))
+        for (const prefix of [recordPrefix(buyer), manaPrefix(buyer), splitPrefix(buyer), keptPrefix(buyer)]) if (key?.startsWith(prefix)) ids.add(key.slice(prefix.length))
       }
       return [...ids]
         .map((id) => pick(s, buyer, id))
@@ -244,6 +255,7 @@ export function createLedger(storage: () => Storage | null): Ledger {
       s.removeItem(recordKey(record.buyer, record.id))
       s.removeItem(manaKey(record.buyer, record.id))
       s.removeItem(splitKey(record.buyer, record.id))
+      s.removeItem(keptKey(record.buyer, record.id))
     }
   }
   /** The operation's prefix over storage, remembering a write that throws (the cart store hides it). */
@@ -287,7 +299,7 @@ export function createLedger(storage: () => Storage | null): Ledger {
         return false
       }
       // Under the other prefixes it is gone, or this write didn't stick: a copy left there could be read as the purchase
-      // (by a build that doesn't know MANA or splits, the Credits one), so the purchase goes no further until it is gone.
+      // (by a build that doesn't know MANA, splits or kept calls, the Credits one), so the purchase goes no further until it is gone.
       for (const left of others) {
         try {
           s.removeItem(left)
