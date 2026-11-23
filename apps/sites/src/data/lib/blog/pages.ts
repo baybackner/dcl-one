@@ -241,6 +241,7 @@ export function loadBlogPost(request: Request, categorySlug: string, postSlug: s
       payload: {
         state: "ok",
         post: { ...toCard(post), body: post.body, assets: images },
+        publishedDate: post.publishedDate,
         related: relatedCards,
         shareUrl: publicPageUrl(request, href, env),
         categories: menu(categories),
