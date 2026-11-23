@@ -34,8 +34,14 @@ export function isTxPending(e: unknown): e is TxPendingError {
   return (e as { name?: string } | null)?.name === "TxPendingError";
 }
 
+/** A buy dialog's answer when the sale went out and its wait ran out: it may still complete, and is never sent again. */
+export const SALE_STILL_PENDING = "The purchase was sent and is still confirming. It was not sent twice; check your activity in a moment.";
+
 /** A buy dialog's answer when the wait that ran out was the MANA approval's: the sale itself was never sent. */
 export const APPROVAL_STILL_PENDING = "Your MANA approval is still confirming, so nothing was bought yet. Close this and buy again once it confirms.";
+
+/** A buy dialog's answer when the MANA approval reverted: the sale was never sent. */
+export const APPROVAL_REVERTED = "Your MANA approval failed on-chain, so nothing was bought. Buy again to send a new one.";
 
 export function isTxReverted(e: unknown): e is TxRevertedError {
   return (e as { name?: string } | null)?.name === "TxRevertedError";
@@ -49,15 +55,17 @@ export function declined(e: unknown): boolean {
 
 /**
  * How a MANA buy (approve, then the sale) that threw ended, for its dialog. `sent` is the sale's hash once its
- * `onSubmitted` had it: only that says the sale went out. A wait that ran out before it was the MANA approval's,
- * and a second Buy then would send a second approval, so that answer offers none.
+ * `onSubmitted` had it: only that says the sale went out. A wait that ran out or a revert before it was the MANA
+ * approval's. An approval still confirming carries its hash, and a second Buy then would send a second approval,
+ * so that answer offers none.
  */
-export type PurchaseFailure = { kind: "pending"; txHash: string } | { kind: "approval-pending" } | { kind: "error"; message: string };
+export type PurchaseFailure = { kind: "pending"; txHash: string } | { kind: "approval-pending"; txHash: string } | { kind: "error"; message: string };
 
 export function purchaseFailure(e: unknown, sent: string | null): PurchaseFailure {
-  if (isTxPending(e)) return sent ? { kind: "pending", txHash: sent } : { kind: "approval-pending" };
+  if (isTxPending(e)) return sent ? { kind: "pending", txHash: sent } : { kind: "approval-pending", txHash: e.txHash };
   if (declined(e)) return { kind: "error", message: "You cancelled the request in your wallet. Nothing was bought." };
-  if (isTxReverted(e)) return { kind: "error", message: "The purchase failed on-chain: the listing may have been sold or cancelled. Nothing was bought." };
+  if (isTxReverted(e))
+    return { kind: "error", message: sent ? "The purchase failed on-chain: the listing may have been sold or cancelled. Nothing was bought." : APPROVAL_REVERTED };
   if (sent) return { kind: "pending", txHash: sent };
   return { kind: "error", message: (e as Error)?.message || "We couldn't complete the purchase. Nothing was bought." };
 }

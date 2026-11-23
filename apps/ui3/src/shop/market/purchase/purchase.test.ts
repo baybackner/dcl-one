@@ -12,6 +12,8 @@ import { fakeChain, fakeWallet, noWait } from "../testing";
 import { archiveBid, archivedBidIds, resetArchivedBidsForTests, unarchiveBid } from "../store/archivedBids";
 import { acceptBid, cancelBid, isBidTrade, placeBid } from "./bids";
 import { buyTradeWithMana, executeLegacyOrder, manaAllowanceFor } from "./executeOrder";
+import { ensureManaAllowance, resetUnconfirmedApprovalsForTests } from "../lib/mana";
+import { APPROVAL_REVERTED, purchaseFailure, TxPendingError, TxRevertedError } from "../lib/tx";
 import { transferItem, transferProblem } from "./transfer";
 
 const MARKET = latestOffChainMarketplace(CHAIN.POLYGON).address;
@@ -22,6 +24,7 @@ const originalFetch = globalThis.fetch;
 let relayed: { params: [string, Hex] }[] = [];
 
 beforeEach(() => {
+  resetUnconfirmedApprovalsForTests();
   relayed = [];
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
@@ -199,3 +202,80 @@ describe("a legacy on-chain order", () => {
   });
 });
 
+describe("a MANA approval still confirming", () => {
+  const SPENDER = `0x${"5".repeat(40)}`;
+  const AMOUNT = manaFromWhole(3);
+  /** Each relayed approval gets its own hash, in order. */
+  const approvalHash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
+  let allowance = 0n;
+  const pending = new Set<string>();
+  const reverted = new Set<string>();
+
+  beforeEach(() => {
+    allowance = 0n;
+    pending.clear();
+    reverted.clear();
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (!String(url).endsWith("/transactions")) throw new Error(`unexpected fetch ${String(url)}`);
+      relayed.push((JSON.parse(String(init?.body)) as { transactionData: { params: [string, Hex] } }).transactionData);
+      return new Response(JSON.stringify({ ok: true, txHash: approvalHash(relayed.length) }));
+    }) as typeof fetch;
+    restore = fakeChain({
+      contracts: { [MANA_POLYGON]: { abi: [...ERC20_ABI, ...COLLECTION_V2_ABI], answer: (fn) => (fn === "allowance" ? allowance : 0n) } },
+      pending,
+      reverted,
+    });
+  });
+
+  const approve = (wallet = fakeWallet()) => ensureManaAllowance({ provider: wallet, chainId: CHAIN.POLYGON, spender: SPENDER, amount: AMOUNT, wait: noWait });
+
+  it("sends no second approval while the first is unmined: a second buy stops on the first one's hash", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("once the first approval mines, the next buy reads the allowance again and sends none", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toBeInstanceOf(TxPendingError);
+    pending.delete(approvalHash(1));
+    allowance = AMOUNT;
+    await expect(approve(wallet)).resolves.toBeNull();
+    expect(relayed).toHaveLength(1);
+  });
+
+  it("a first approval that reverted is forgotten: the next buy sends a new one", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toBeInstanceOf(TxPendingError);
+    pending.delete(approvalHash(1));
+    reverted.add(approvalHash(1));
+    await expect(approve(wallet)).resolves.toBe(approvalHash(2));
+    expect(relayed).toHaveLength(2);
+  });
+
+  it("holds back only the same owner and spender", async () => {
+    pending.add(approvalHash(1));
+    await expect(approve(fakeWallet())).rejects.toBeInstanceOf(TxPendingError);
+    await expect(approve(fakeWallet({ key: `0x${"7".repeat(64)}` }))).resolves.toBe(approvalHash(2));
+    expect(relayed).toHaveLength(2);
+  });
+});
+
+describe("how a MANA buy that threw ended", () => {
+  const SALE = `0x${"d".repeat(64)}`;
+  const APPROVAL = `0x${"a".repeat(64)}`;
+
+  it("a wait that ran out before the sale went out is the approval's, and carries its hash", () => {
+    expect(purchaseFailure(new TxPendingError(APPROVAL, "The MANA approval"), null)).toEqual({ kind: "approval-pending", txHash: APPROVAL });
+    expect(purchaseFailure(new TxPendingError(SALE, "The purchase"), SALE)).toEqual({ kind: "pending", txHash: SALE });
+  });
+
+  it("a revert before the sale went out is the approval's, not a sold listing", () => {
+    expect(purchaseFailure(new TxRevertedError(APPROVAL), null)).toEqual({ kind: "error", message: APPROVAL_REVERTED });
+    expect(purchaseFailure(new TxRevertedError(SALE), SALE)).toEqual({ kind: "error", message: expect.stringMatching(/listing may have been sold/) });
+  });
+});

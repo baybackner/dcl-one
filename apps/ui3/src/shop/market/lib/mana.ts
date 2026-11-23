@@ -13,7 +13,7 @@ import type { ManaWei } from "@shop/model/money";
 import { ERC20_ABI, manaToken } from "@shop/market/lib/contracts";
 import { sendMetaTransaction } from "./metaTx";
 import { readContract } from "./rpc";
-import { sendCall, waitForReceipt, walletAccount, type WaitOptions } from "./tx";
+import { isTxPending, isTxReverted, sendCall, waitForReceipt, walletAccount, type WaitOptions } from "./tx";
 
 export { parseManaInput } from "@shop/model/money";
 
@@ -33,8 +33,21 @@ export async function hasManaAllowance(chainId: ChainId, owner: string, spender:
 }
 
 /**
+ * An approval this page sent that had not confirmed when its wait ran out, per chain, owner and spender. The next
+ * approval for that spender reads its receipt first: while it is unmined no second approval is sent (it would only
+ * cost a second fee), and the purchase stops on the earlier one's hash instead.
+ */
+const unconfirmedApprovals = new Map<string, string>();
+const approvalKey = (chainId: ChainId, owner: string, spender: string) => `${chainId}:${owner}:${spender.toLowerCase()}`;
+
+export function resetUnconfirmedApprovalsForTests(): void {
+  unconfirmedApprovals.clear();
+}
+
+/**
  * Approves `spender` for `amount` MANA when the current allowance is short. Resolves null when nothing was
- * needed, else the confirmed hash. The exact amount, never an unlimited allowance.
+ * needed, else the confirmed hash. The exact amount, never an unlimited allowance. An earlier approval for the
+ * same spender that has not confirmed yet throws `TxPendingError` with its hash, after one read of its receipt.
  */
 export async function ensureManaAllowance(opts: {
   provider: Eip1193Provider;
@@ -44,7 +57,23 @@ export async function ensureManaAllowance(opts: {
   wait?: WaitOptions;
 }): Promise<string | null> {
   const owner = await walletAccount(opts.provider);
-  if (await hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount)) return null;
+  const key = approvalKey(opts.chainId, owner, opts.spender);
+  if (await hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount)) {
+    unconfirmedApprovals.delete(key);
+    return null;
+  }
+  const earlier = unconfirmedApprovals.get(key);
+  if (earlier) {
+    try {
+      // One read, no wait: unmined (or unreadable) answers TxPendingError with the earlier hash.
+      await waitForReceipt(opts.chainId, earlier, "The MANA approval", { ...opts.wait, timeoutMs: 0 });
+    } catch (e) {
+      if (!isTxReverted(e)) throw e;
+    }
+    // Mined or reverted, it no longer holds a second approval back; mined, it may have been enough.
+    unconfirmedApprovals.delete(key);
+    if (await hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount)) return null;
+  }
   const mana = manaToken(opts.chainId);
   const hash = isPolygon(opts.chainId)
     ? await sendMetaTransaction({
@@ -54,5 +83,13 @@ export async function ensureManaAllowance(opts: {
         functionData: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [opts.spender as `0x${string}`, opts.amount] }),
       })
     : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount] });
-  return waitForReceipt(opts.chainId, hash, "The MANA approval", opts.wait);
+  unconfirmedApprovals.set(key, hash);
+  try {
+    const confirmed = await waitForReceipt(opts.chainId, hash, "The MANA approval", opts.wait);
+    unconfirmedApprovals.delete(key);
+    return confirmed;
+  } catch (e) {
+    if (!isTxPending(e)) unconfirmedApprovals.delete(key);
+    throw e;
+  }
 }

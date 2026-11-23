@@ -96,12 +96,23 @@ function purchaseEnds(how: (opts: { onSubmitted?: (hash: string) => void }) => P
   else vi.mocked(executeLegacyOrder).mockImplementationOnce(how);
 }
 
-describe.each<Listing>(["trade", "legacy order"])("a LAND bought from its page through a %s, with the sale still confirming", (kind) => {
+describe.each<Listing>(["trade", "legacy order"])("a LAND bought from its page through a %s", (kind) => {
   beforeEach(() => {
     listing = kind;
   });
 
-  it("keeps the notice up, then reads that LAND again once it closes, and not its neighbour", async () => {
+  it("keeps its success up, then reads that LAND again once it closes, and not its neighbour", async () => {
+    const before = await openBuy();
+    expect(await screen.findByText(/Purchase complete/)).toBeTruthy();
+    // Not read under the success: a read empties the page until it answers, and would take the dialog with it.
+    expect(reads).toEqual(before);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(reads[BOUGHT]).toBe(before[BOUGHT]! + 1));
+    expect(reads[NEIGHBOUR]).toBe(before[NEIGHBOUR]);
+  });
+
+  it("with the sale still confirming, keeps the notice up, then reads that LAND again once it closes, and not its neighbour", async () => {
     purchaseEnds(async (opts) => {
       opts.onSubmitted?.(SALE);
       throw new TxPendingError(SALE, "The purchase");
