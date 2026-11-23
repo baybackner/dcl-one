@@ -899,6 +899,39 @@ describe("a kept credits group the wallet was handed", () => {
     }
   });
 
+  it("never takes half a byte, or what isn't bytecode, for a smart wallet: stopped before the wallet, the credit given back", async () => {
+    for (const code of ["0x0", "not-bytecode"]) {
+      for (const route of ["direct", "fallback"] as const) {
+        // Fallback: the relay tries it as ever, then refuses it as not sent; the wallet's way reads the account again.
+        const h = await harness(route === "fallback" ? { relay: "refuse", refuseStatus: 503 } : {});
+        h.chain.code = (async () => code) as unknown as typeof h.chain.code;
+        const calls: string[] = [];
+        const deps = {
+          ...h.deps,
+          ctx: { ...h.deps.ctx, gasless: route === "fallback" },
+          onCreditsCall: () => void calls.push("kept"),
+          onCreditsEnvelope: () => void calls.push("envelope"),
+          onCreditsUnkept: () => void calls.push("unkept"),
+        };
+        expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "failed", failure: { kind: "error" } });
+        expect(calls).not.toContain("unkept");
+        expect(h.wallet.sent).toHaveLength(0);
+        expect(cancels(h)).toBe(1);
+      }
+    }
+  });
+
+  it("relays a group whose account read isn't bytecode as ever, kept and attributable", async () => {
+    const h = await harness();
+    h.chain.code = (async () => "not-bytecode") as unknown as typeof h.chain.code;
+    const calls: string[] = [];
+    const deps = { ...h.deps, onCreditsCall: () => void calls.push("kept"), onCreditsEnvelope: () => void calls.push("envelope"), onCreditsUnkept: () => void calls.push("unkept") };
+    expect(await runGroup(deps, h.group, h.resolved)).toMatchObject({ status: "confirmed" });
+    expect(calls).toEqual(["kept", "envelope"]);
+    expect(h.relay.posts).toHaveLength(1);
+    expect(h.wallet.sent).toHaveLength(0);
+  });
+
   it("keeps an account read as empty as the buyer's own: kept, its bytes too", async () => {
     const h = await harness();
     const calls: string[] = [];

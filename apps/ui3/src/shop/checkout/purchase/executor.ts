@@ -26,7 +26,7 @@ import type { GroupFailure, GroupProgress, PurchaseState } from "@shop/model/pur
 import { authorizeUsdCreditGroup, cancelUsdIntents, fetchUserPurchases, type SignedSession } from "@shop/credits/credits";
 import { gaslessEnabled } from "../chain/config";
 import { isGaslessUnavailable, isSignatureDeclined } from "../chain/metatx";
-import { isPendingTxError, isRevertedTxError, isWalletRefusal, RefusedBeforeWallet } from "../chain/wallet";
+import { accountCodeKind, isPendingTxError, isRevertedTxError, isWalletRefusal, RefusedBeforeWallet } from "../chain/wallet";
 import { AuthorizationKind, getAuthorizationStatus, needsApprovalStep, ensureAuthorization, type ShopAuthorization } from "../lib/authorizations";
 import { friendlyError, isRejection, relayLimitText } from "../lib/errors";
 import { isWrongNetworkError } from "../lib/network";
@@ -135,16 +135,15 @@ class AccountUnreadError extends Error {
 }
 
 /**
- * What `ctx.buyer`'s account is on `chainId`: `eoa` only for bytecode read as empty, `contract` for any other bytecode,
- * `unknown` for a read that fails, answers something else, or takes longer than ACCOUNT_READ_MS.
+ * What `ctx.buyer`'s account is on `chainId`, as `accountCodeKind` classifies the bytecode read; `unknown` too for a read
+ * that fails or takes longer than ACCOUNT_READ_MS.
  */
 async function accountKind(ctx: RailContext, chainId: number): Promise<"eoa" | "contract" | "unknown"> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), ACCOUNT_READ_MS)));
   try {
     const code = await Promise.race([ctx.reader.code(chainId as Parameters<RailContext["reader"]["code"]>[0], ctx.buyer), late]);
-    if (typeof code !== "string" || !/^0x[0-9a-fA-F]*$/.test(code)) return "unknown";
-    return code === "0x" ? "eoa" : "contract";
+    return accountCodeKind(code);
   } catch {
     return "unknown";
   } finally {

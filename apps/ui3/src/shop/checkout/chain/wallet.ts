@@ -111,6 +111,16 @@ export function isPendingTxError(err: unknown): boolean {
 }
 
 /**
+ * What an account is by the bytecode a node read for it: `eoa` only for exactly `0x`, `contract` for one or more whole bytes
+ * of hex, and `unknown` for anything else (a failed read, half a byte, not hex at all). Every reader of an account's kind
+ * goes through this one classification, so an answer is never a contract in one place and inconclusive in another.
+ */
+export function accountCodeKind(code: unknown): "eoa" | "contract" | "unknown" {
+  if (code === "0x") return "eoa";
+  return typeof code === "string" && /^0x(?:[0-9a-fA-F]{2})+$/.test(code) ? "contract" : "unknown";
+}
+
+/**
  * A request the page itself refused before handing it to the wallet (a guard over the provider, such as /play's
  * walletGuard): it never reached the wallet. Only this class says so, by identity: a wallet's own error with the same name
  * or code proves nothing.
