@@ -1,7 +1,7 @@
 // World: current parcel + teleport, the live player pose for the minimap, the realm kind,
 // and the mic state.
 //   from: @dcl/sdk getPlayer().position (parcel), Transform of the player/camera entities
-//         (pose), ./teleport, Runtime.getRealm,
+//         (pose), RestrictedActions.teleportTo, Runtime.getRealm,
 //         BevyApi.getMicState() / setMicEnabled().
 import { Transform, engine } from '@dcl/sdk/ecs'
 import { Quaternion } from '@dcl/sdk/math'
@@ -12,7 +12,6 @@ import { BevyApi } from '../bevy-api'
 import type { Ctx } from '../bridge'
 import { createSceneLookup } from '../sceneLookup'
 import { throttleByDt, singleFlight } from '../system-helpers'
-import { teleport as teleportThrough, type TeleportDestination } from './teleport'
 import { setNearbyVoiceBlocked } from './voice'
 
 // Pose stream: ~20/s is smooth enough for the minimap once React interpolates between
@@ -32,7 +31,10 @@ function pushSystem(ctx: Ctx, message: string): void {
   ctx.send({ kind: 'chat', chat: { sender: '', message, channel: 'Nearby', messageId: '' } })
 }
 
-const teleport = (to: TeleportDestination): Promise<unknown> => teleportThrough(to, BevyApi.teleport, teleportTo)
+// The engine's teleportTo also reads `spawnPoint`, the name (compared in lowercase) of the spawn
+// point of the scene landed in to use; the SDK's request type does not carry it yet.
+type TeleportRequest = Parameters<typeof teleportTo>[0] & { spawnPoint?: string }
+const teleport = (request: TeleportRequest): Promise<unknown> => teleportTo(request)
 
 export function registerWorld(ctx: Ctx): void {
   ctx.on('getHomeScene', async () => {
@@ -67,7 +69,7 @@ export function registerWorld(ctx: Ctx): void {
 
   // A teleport inside the realm answers too when the page gave it an id (chat's /goto does).
   ctx.on('teleport', (msg) => {
-    const request = teleport({ parcel: { x: msg.x, y: msg.y }, realm: msg.realm, spawnPoint: msg.spawnPoint })
+    const request = teleport({ worldCoordinates: { x: msg.x, y: msg.y }, realm: msg.realm, spawnPoint: msg.spawnPoint })
     travel(msg.realm ?? '', msg.travelId, request)
   })
 

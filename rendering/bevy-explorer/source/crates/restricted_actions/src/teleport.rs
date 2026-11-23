@@ -22,12 +22,12 @@ use scene_runner::{
     update_world::{gltf_container::GLTF_LOADING, mesh_collider::SceneColliderData},
     OutOfWorld,
 };
-use system_bridge::SystemApi;
 use wallet::Wallet;
 
-// (parcel, realm, response, report a realm change's outcome)
+// (parcel, realm, spawn point name, response, report a realm change's outcome)
 type TeleportAction = (
     Option<IVec2>,
+    Option<String>,
     Option<String>,
     RpcResultSender<Result<(), String>>,
     bool,
@@ -67,19 +67,33 @@ pub fn teleport_player(
     mut perms: Permission<TeleportAction>,
     mut realm_target: ResMut<RealmInitialLocation>,
     super_user: Query<(), With<SuperUserScene>>,
-    mut hud_requests: EventReader<SystemApi>,
 ) {
-    // (the action, the spawn point it names): a scene's teleport names none
-    let mut actions: Vec<(TeleportAction, Option<String>)> = Vec::new();
+    let mut actions: Vec<TeleportAction> = Vec::new();
 
-    for (scene, to, realm, response) in events.read().filter_map(|ev| match &ev.call {
+    for (scene, to, realm, spawn_point, response) in events.read().filter_map(|ev| match &ev.call {
         RpcCall::TeleportPlayer {
             to,
             realm,
+            spawn_point,
             response,
-        } => Some((ev.origin.scene(), *to, realm.clone(), response.clone())),
+        } => Some((
+            ev.origin.scene(),
+            *to,
+            realm.clone(),
+            spawn_point.clone(),
+            response.clone(),
+        )),
         _ => None,
     }) {
+        // the name comes from scenes, and is kept on the landing and logged: it is bounded
+        // here, where every request arrives, before anyone is asked for a permission
+        if spawn_point
+            .as_ref()
+            .is_some_and(|name| name.len() > MAX_SPAWN_POINT_NAME)
+        {
+            response.send(Err(spawn_point_name_too_long()));
+            continue;
+        }
         let parcel = to.map(|to| format!("({},{})", to.x, to.y));
         let (ty, detail) = match (&realm, parcel) {
             (Some(realm), Some(parcel)) => {
@@ -95,52 +109,23 @@ pub fn teleport_player(
         // system requests reply to their requester; a scene is gone once its realm change lands,
         // so its player is told in the console, unless it is the HUD's own bridge scene
         let Some(scene) = scene else {
-            actions.push(((to, realm, response, false), None));
+            actions.push((to, realm, spawn_point, response, false));
             continue;
         };
         let report = !super_user.contains(scene);
         perms.check(
             ty,
             scene,
-            (to, realm, response, report),
+            (to, realm, spawn_point, response, report),
             Some(detail),
             false,
         );
     }
 
-    let unnamed = |action| (action, None);
-    actions.extend(perms.drain_success(PermissionType::Teleport).map(unnamed));
-    actions.extend(
-        perms
-            .drain_success(PermissionType::ChangeRealm)
-            .map(unnamed),
-    );
-    // the HUD's own, after the scenes': the latest request is the one the player made
-    for request in hud_requests.read() {
-        if let SystemApi::Teleport {
-            to,
-            realm,
-            spawn_point,
-            response,
-        } = request
-        {
-            // whoever asks (the HUD's bridge scene, the console): the name is kept on the
-            // landing and logged, so it is bounded here, where every such request arrives
-            if spawn_point
-                .as_ref()
-                .is_some_and(|name| name.len() > MAX_SPAWN_POINT_NAME)
-            {
-                response.send(Err(spawn_point_name_too_long()));
-                continue;
-            }
-            actions.push((
-                (*to, realm.clone(), response.clone(), false),
-                spawn_point.clone(),
-            ));
-        }
-    }
+    actions.extend(perms.drain_success(PermissionType::Teleport));
+    actions.extend(perms.drain_success(PermissionType::ChangeRealm));
 
-    for ((to, realm, response, report), spawn_point) in actions {
+    for (to, realm, spawn_point, response, report) in actions {
         if let Some(realm) = realm {
             // A realm change (a full reconnect, even to the realm we are in — same as changeRealm),
             // landing on the parcel once it is live, or on the realm's default spawn without one.
@@ -164,7 +149,7 @@ pub fn teleport_player(
             continue;
         }
 
-        // Neither: a scene's request was answered above; a system request may name neither.
+        // Neither: already answered above (a system request without a scene is never built that way).
         let Some(to) = to else {
             response.send(Err("teleport needs a parcel or a realm".to_owned()));
             continue;
@@ -190,10 +175,10 @@ pub fn teleport_player(
         info!("teleported to {to}");
     }
 
-    for (_, _, response, _) in perms.drain_fail(PermissionType::Teleport) {
+    for (_, _, _, response, _) in perms.drain_fail(PermissionType::Teleport) {
         response.send(Err("User declined".to_owned()))
     }
-    for (_, _, response, _) in perms.drain_fail(PermissionType::ChangeRealm) {
+    for (_, _, _, response, _) in perms.drain_fail(PermissionType::ChangeRealm) {
         response.send(Err("User declined".to_owned()))
     }
 }
@@ -410,7 +395,12 @@ pub(crate) fn handle_out_of_world(
 #[cfg(test)]
 mod tests {
     use bevy::{ecs::event::Events, ecs::system::RunSystemOnce, platform::collections::HashSet};
-    use common::structs::{AppConfig, CurrentRealm, PermissionUsed, PrimaryPlayerRes};
+    use common::{
+        rpc::RpcOrigin,
+        structs::{
+            AppConfig, CurrentRealm, PermissionUsed, PrimaryPlayerRes, StartupScene, StartupScenes,
+        },
+    };
     use dcl_types::SceneId;
     use scene_runner::{initialize_scene::PortableScenes, permissions::PermissionManager};
 
@@ -652,7 +642,6 @@ mod tests {
     fn teleports() -> (App, Entity) {
         let mut app = App::new();
         app.add_event::<RpcCallEvent>()
-            .add_event::<SystemApi>()
             .add_event::<PermissionUsed>()
             .add_event::<ChangeRealmEvent>()
             .init_resource::<PermissionManager>()
@@ -676,13 +665,15 @@ mod tests {
         (app, player)
     }
 
-    fn hud_teleport(app: &mut App, to: (i32, i32), realm: Option<&str>, spawn_point: Option<&str>) {
-        app.world_mut().send_event(SystemApi::Teleport {
-            to: Some(IVec2::new(to.0, to.1)),
-            realm: realm.map(str::to_owned),
-            spawn_point: spawn_point.map(str::to_owned),
-            response: RpcResultSender::default(),
-        });
+    /// A teleport the engine itself asks for, as the console's `/teleport` does.
+    fn teleport(app: &mut App, to: (i32, i32), realm: Option<&str>, spawn_point: Option<&str>) {
+        app.world_mut()
+            .send_event(RpcCallEvent::engine(RpcCall::TeleportPlayer {
+                to: Some(IVec2::new(to.0, to.1)),
+                realm: realm.map(str::to_owned),
+                spawn_point: spawn_point.map(str::to_owned),
+                response: RpcResultSender::default(),
+            }));
         app.update();
     }
 
@@ -701,14 +692,14 @@ mod tests {
     fn a_second_teleport_before_the_first_lands_takes_its_own_spawn_point() {
         let (mut app, player) = teleports();
 
-        hud_teleport(&mut app, (1, 1), None, Some("roof"));
+        teleport(&mut app, (1, 1), None, Some("roof"));
         assert_eq!(
             landing_spawn_point(&app, player),
             Some(Some("roof".to_owned()))
         );
 
         // still out of world: the second landing names none, and lands where it asked
-        hud_teleport(&mut app, (2, 2), None, None);
+        teleport(&mut app, (2, 2), None, None);
         assert_eq!(landing_spawn_point(&app, player), Some(None));
         let position = app.world().entity(player).get::<Transform>().unwrap();
         assert_eq!(position.translation.xz(), Vec2::new(40.0, -40.0));
@@ -719,9 +710,9 @@ mod tests {
         let (mut app, player) = teleports();
 
         // a teleport inside the realm, still loading its scene
-        hud_teleport(&mut app, (10, 20), None, None);
+        teleport(&mut app, (10, 20), None, None);
         // then one to another realm: the name waits with that realm's landing
-        hud_teleport(&mut app, (3, 4), Some("mana.dcl.eth"), Some("door"));
+        teleport(&mut app, (3, 4), Some("mana.dcl.eth"), Some("door"));
 
         assert_eq!(landing_spawn_point(&app, player), Some(None));
         assert_eq!(
@@ -738,9 +729,9 @@ mod tests {
     fn a_teleport_inside_the_realm_does_not_share_a_realm_changes_spawn_point() {
         let (mut app, player) = teleports();
 
-        hud_teleport(&mut app, (3, 4), Some("mana.dcl.eth"), Some("door"));
+        teleport(&mut app, (3, 4), Some("mana.dcl.eth"), Some("door"));
         // the realm change is still in flight
-        hud_teleport(&mut app, (1, 2), None, Some("roof"));
+        teleport(&mut app, (1, 2), None, Some("roof"));
 
         assert_eq!(
             landing_spawn_point(&app, player),
@@ -757,12 +748,13 @@ mod tests {
     #[test]
     fn a_realm_change_without_a_parcel_carries_the_spawn_point_to_the_realms_spawn() {
         let (mut app, _) = teleports();
-        app.world_mut().send_event(SystemApi::Teleport {
-            to: None,
-            realm: Some("mana.dcl.eth".to_owned()),
-            spawn_point: Some("door".to_owned()),
-            response: RpcResultSender::default(),
-        });
+        app.world_mut()
+            .send_event(RpcCallEvent::engine(RpcCall::TeleportPlayer {
+                to: None,
+                realm: Some("mana.dcl.eth".to_owned()),
+                spawn_point: Some("door".to_owned()),
+                response: RpcResultSender::default(),
+            }));
         app.update();
 
         assert_eq!(
@@ -777,12 +769,13 @@ mod tests {
     fn a_spawn_point_name_too_long_is_refused() {
         let (mut app, player) = teleports();
         let (response, mut answer) = RpcResultSender::channel();
-        app.world_mut().send_event(SystemApi::Teleport {
-            to: Some(IVec2::new(1, 1)),
-            realm: None,
-            spawn_point: Some("x".repeat(MAX_SPAWN_POINT_NAME + 1)),
-            response,
-        });
+        app.world_mut()
+            .send_event(RpcCallEvent::engine(RpcCall::TeleportPlayer {
+                to: Some(IVec2::new(1, 1)),
+                realm: None,
+                spawn_point: Some("x".repeat(MAX_SPAWN_POINT_NAME + 1)),
+                response,
+            }));
         app.update();
 
         assert!(
@@ -793,13 +786,100 @@ mod tests {
         let position = app.world().entity(player).get::<Transform>().unwrap();
         assert_eq!(position.translation, Vec3::ZERO);
         // the longest one allowed goes through
-        hud_teleport(
+        teleport(
             &mut app,
             (1, 1),
             None,
             Some(&"x".repeat(MAX_SPAWN_POINT_NAME)),
         );
         assert!(landing_spawn_point(&app, player).is_some());
+    }
+
+    /// A scene running in `app`, as the HUD's bridge scene when `super_user`, and a teleport of
+    /// its own naming `spawn_point`. Returns what the scene is answered.
+    fn scene_teleport(
+        app: &mut App,
+        super_user: bool,
+        spawn_point: String,
+    ) -> common::rpc::RpcResultReceiver<Result<(), String>> {
+        let context = RendererSceneContext::new(
+            SceneId::DUMMY,
+            "scene".to_owned(),
+            String::new(),
+            false,
+            0,
+            String::new(),
+            IVec2::ZERO,
+            HashSet::from_iter([IVec2::ZERO]),
+            vec![],
+            Default::default(),
+            vec![],
+            Entity::PLACEHOLDER,
+            0.0,
+            false,
+            "",
+            false,
+            false,
+        );
+        let scene = app.world_mut().spawn(context).id();
+        app.insert_resource(StartupScenes {
+            scenes: vec![StartupScene {
+                source: String::new(),
+                super_user,
+                preview: false,
+                hot_reload: None,
+                hash: Some("scene".to_owned()),
+                failed: false,
+            }],
+        });
+        let (response, answer) = RpcResultSender::channel();
+        app.world_mut().send_event(RpcCallEvent {
+            origin: RpcOrigin::Scene {
+                entity: scene,
+                hash: "scene".into(),
+            },
+            call: RpcCall::TeleportPlayer {
+                to: Some(IVec2::new(1, 1)),
+                realm: None,
+                spawn_point: Some(spawn_point),
+                response,
+            },
+        });
+        app.update();
+        answer
+    }
+
+    // The HUD's bridge scene asks through the scene API: its permission is granted without
+    // asking, and the name stays with its request through the permission check.
+    #[test]
+    fn a_scenes_teleport_carries_the_spawn_point_it_names() {
+        let (mut app, player) = teleports();
+
+        let mut answer = scene_teleport(&mut app, true, "roof".to_owned());
+
+        assert!(matches!(answer.try_recv(), Ok(Ok(()))));
+        assert_eq!(
+            landing_spawn_point(&app, player),
+            Some(Some("roof".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_scenes_spawn_point_name_too_long_is_refused_before_a_permission_is_asked() {
+        let (mut app, player) = teleports();
+
+        // a scene whose teleport the player would be asked about
+        let mut answer = scene_teleport(&mut app, false, "x".repeat(MAX_SPAWN_POINT_NAME + 1));
+
+        assert!(
+            matches!(answer.try_recv(), Ok(Err(reason)) if reason == spawn_point_name_too_long())
+        );
+        assert!(app
+            .world()
+            .resource::<PermissionManager>()
+            .pending
+            .is_empty());
+        assert_eq!(landing_spawn_point(&app, player), None);
     }
 
     // The schedule the plugin runs: a landing whose scene is ready in the frame a new teleport
@@ -827,7 +907,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_event::<RpcCallEvent>()
-            .add_event::<SystemApi>()
             .add_event::<PermissionUsed>()
             .add_event::<ChangeRealmEvent>()
             .add_event::<ReturnedToWorld>()
@@ -859,7 +938,7 @@ mod tests {
             .id();
         app.insert_resource(PrimaryPlayerRes(player));
 
-        hud_teleport(&mut app, (1, 1), None, None);
+        teleport(&mut app, (1, 1), None, None);
 
         // the old landing found its spawn point, and is over
         assert_eq!(last_named(app.world(), player), Some(("roof", true)));

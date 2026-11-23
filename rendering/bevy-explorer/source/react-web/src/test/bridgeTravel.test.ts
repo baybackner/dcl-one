@@ -1,14 +1,13 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 
 // The world domain's travel handlers (bridge-scene/src/domains/world): what the page's teleport and
-// changeRealm ask of the engine, and the travelResult each is answered with.
+// changeRealm ask of the scene API's teleportTo, and the travelResult each is answered with.
 vi.mock('../../bridge-scene/node_modules/@dcl/sdk/ecs.js', () => ({ engine: {}, Transform: { getOrNull: () => null } }))
 vi.mock('../../bridge-scene/node_modules/@dcl/sdk/players/index.js', () => ({ getPlayer: () => null }))
 const teleportTo = vi.hoisted(() => vi.fn())
 vi.mock('~system/RestrictedActions', () => ({ teleportTo }))
 vi.mock('~system/Runtime', () => ({ getRealm: vi.fn(async () => ({})) }))
-const api = vi.hoisted(() => ({ teleport: vi.fn() as ReturnType<typeof vi.fn> | undefined }))
-vi.mock('../../bridge-scene/src/bevy-api', () => ({ BevyApi: api }))
+vi.mock('../../bridge-scene/src/bevy-api', () => ({ BevyApi: {} }))
 
 const { registerWorld } = await import('../../bridge-scene/src/domains/world')
 
@@ -30,14 +29,14 @@ const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve
 
 describe("the bridge's travel handlers", () => {
   beforeEach(() => {
-    api.teleport = vi.fn(async () => undefined)
     teleportTo.mockReset()
+    teleportTo.mockResolvedValue({})
   })
 
   it('a teleport inside the realm answers too, with no realm', async () => {
     const b = bridge()
     b.on.get('teleport')?.({ kind: 'teleport', x: 1, y: 2, spawnPoint: 'roof', travelId: -1 })
-    expect(api.teleport).toHaveBeenCalledWith({ parcel: { x: 1, y: 2 }, realm: undefined, spawnPoint: 'roof' })
+    expect(teleportTo).toHaveBeenCalledWith({ worldCoordinates: { x: 1, y: 2 }, realm: undefined, spawnPoint: 'roof' })
     await settled()
     expect(b.sent).toEqual([{ kind: 'travelResult', travelId: -1, realm: '', ok: true }])
   })
@@ -45,7 +44,7 @@ describe("the bridge's travel handlers", () => {
   it('a teleport to a realm carries its parcel and spawn point, and answers with the realm', async () => {
     const b = bridge()
     b.on.get('teleport')?.({ kind: 'teleport', realm: 'mana.dcl.eth', x: 3, y: 4, spawnPoint: 'door', travelId: 2 })
-    expect(api.teleport).toHaveBeenCalledWith({ parcel: { x: 3, y: 4 }, realm: 'mana.dcl.eth', spawnPoint: 'door' })
+    expect(teleportTo).toHaveBeenCalledWith({ worldCoordinates: { x: 3, y: 4 }, realm: 'mana.dcl.eth', spawnPoint: 'door' })
     await settled()
     expect(b.sent).toEqual([{ kind: 'travelResult', travelId: 2, realm: 'mana.dcl.eth', ok: true }])
   })
@@ -53,16 +52,14 @@ describe("the bridge's travel handlers", () => {
   it('a realm change forwards the spawn point, with no parcel', async () => {
     const b = bridge()
     b.on.get('changeRealm')?.({ kind: 'changeRealm', realm: 'mana.dcl.eth', spawnPoint: 'door', travelId: 3 })
-    expect(api.teleport).toHaveBeenCalledWith({ realm: 'mana.dcl.eth', spawnPoint: 'door' })
+    expect(teleportTo).toHaveBeenCalledWith({ realm: 'mana.dcl.eth', spawnPoint: 'door' })
     await settled()
     expect(b.sent).toEqual([{ kind: 'travelResult', travelId: 3, realm: 'mana.dcl.eth', ok: true }])
   })
 
   it("a refusal is answered in the engine's words", async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    api.teleport = vi.fn(async () => {
-      throw new Error('status: 404 Not Found')
-    })
+    teleportTo.mockRejectedValue(new Error('status: 404 Not Found'))
     const b = bridge()
     b.on.get('changeRealm')?.({ kind: 'changeRealm', realm: 'nowhere.dcl.eth', travelId: 4 })
     b.on.get('teleport')?.({ kind: 'teleport', x: 1, y: 2, travelId: -2 })
@@ -77,23 +74,7 @@ describe("the bridge's travel handlers", () => {
     const b = bridge()
     b.on.get('teleport')?.({ kind: 'teleport', x: 1, y: 2 })
     await settled()
-    expect(api.teleport).toHaveBeenCalledWith({ parcel: { x: 1, y: 2 }, realm: undefined, spawnPoint: undefined })
+    expect(teleportTo).toHaveBeenCalledWith({ worldCoordinates: { x: 1, y: 2 }, realm: undefined, spawnPoint: undefined })
     expect(b.sent).toEqual([])
-  })
-
-  it('on an engine without the HUD teleport, a named spawn point is refused and answered as a failure', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    api.teleport = undefined
-    teleportTo.mockResolvedValue({})
-    const b = bridge()
-    b.on.get('teleport')?.({ kind: 'teleport', x: 1, y: 2, spawnPoint: 'roof', travelId: -3 })
-    b.on.get('teleport')?.({ kind: 'teleport', x: 1, y: 2, travelId: -4 })
-    await settled()
-    expect(teleportTo).toHaveBeenCalledTimes(1)
-    expect(teleportTo).toHaveBeenCalledWith({ worldCoordinates: { x: 1, y: 2 }, realm: undefined })
-    expect(b.sent).toEqual([
-      { kind: 'travelResult', travelId: -3, realm: '', ok: false, message: 'This engine cannot land on a named spawn point.' },
-      { kind: 'travelResult', travelId: -4, realm: '', ok: true }
-    ])
   })
 })

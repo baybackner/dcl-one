@@ -1,14 +1,13 @@
 use bevy::prelude::*;
 use bevy_console::ConsoleCommand;
 use common::{
-    rpc::RpcResultSender,
+    rpc::{RpcCall, RpcCallEvent, RpcResultSender},
     structs::{
         AppConfig, ParcelGrassSetting, PreviewMode, PrimaryUser, SceneLoadDistance, SessionGraphics,
     },
 };
 use console::PendingConsoleResponses;
 use scene_runner::initialize_scene::{parcels_in_range, ScenePointers};
-use system_bridge::SystemApi;
 
 /// set location
 #[derive(clap::Parser, ConsoleCommand)]
@@ -26,25 +25,25 @@ pub struct ChangeLocationCommand {
 }
 
 pub fn change_location(
+    mut commands: Commands,
     mut input: ConsoleCommand<ChangeLocationCommand>,
     mut pending: ResMut<PendingConsoleResponses>,
-    mut hud_teleports: EventWriter<SystemApi>,
 ) {
     if let Some(Ok(command)) = input.take() {
-        // the HUD's teleport: with a realm a realm change (a full reconnect) landing on the
-        // parcel, without one a move inside the realm the player is in
+        // the teleport scenes use, sent by the engine itself: with a realm a realm change (a full
+        // reconnect) landing on the parcel, without one a move inside the realm the player is in
         let (response, rx) = RpcResultSender::channel();
         let location = (command.x, command.y);
         let reply = match &command.realm {
             Some(realm) => format!("new location: {location:?} in {realm}"),
             None => format!("new location: {location:?}"),
         };
-        hud_teleports.write(SystemApi::Teleport {
+        commands.send_event(RpcCallEvent::engine(RpcCall::TeleportPlayer {
             to: Some(IVec2::new(command.x, command.y)),
             realm: command.realm,
             spawn_point: command.spawn,
             response,
-        });
+        }));
         pending.push_receiver(
             rx,
             move |result| result.map(|()| reply.clone()),

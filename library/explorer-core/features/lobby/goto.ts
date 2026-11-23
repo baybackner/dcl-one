@@ -57,7 +57,7 @@ const GENESIS_BOUNDS: ReadonlyArray<readonly [number, number, number, number]> =
   [151, 59, 164, 151]
 ]
 /** The worlds server's bound on a deployment's parcels. */
-export const WORLD_PARCEL_LIMIT = 150
+const WORLD_PARCEL_LIMIT = 150
 
 /** A world's name as `worldName` completes it: `name`, `name.dcl.eth` or an ENS `name.eth`. */
 export function isWorldName(name: string): boolean {
@@ -76,6 +76,11 @@ export function isGenesisParcel(x: number, y: number): boolean {
   return GENESIS_BOUNDS.some(([minX, minY, maxX, maxY]) => x >= minX && x < maxX && y >= minY && y < maxY)
 }
 
+/** Whether a world may have this parcel. */
+export function isWorldParcel(x: number, y: number): boolean {
+  return Math.abs(x) <= WORLD_PARCEL_LIMIT && Math.abs(y) <= WORLD_PARCEL_LIMIT
+}
+
 export function isDestination(text: string): boolean {
   const t = parseGotoTarget(text)
   if (t.random || t.crowd) return true
@@ -83,7 +88,7 @@ export function isDestination(text: string): boolean {
   if (t.world != null && !isWorldName(t.world)) return false
   if (t.parcel != null) {
     const { x, y } = t.parcel
-    const inside = t.world != null ? Math.abs(x) <= WORLD_PARCEL_LIMIT && Math.abs(y) <= WORLD_PARCEL_LIMIT : isGenesisParcel(x, y)
+    const inside = t.world != null ? isWorldParcel(x, y) : isGenesisParcel(x, y)
     if (!inside) return false
   }
   return t.world != null || t.parcel != null

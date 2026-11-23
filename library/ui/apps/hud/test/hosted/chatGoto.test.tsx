@@ -68,6 +68,16 @@ describe("chat's /goto", () => {
     expect(systemLines(h).at(-1)).toBe('🟢 Welcome to https://realm.example/other!')
   })
 
+  it('main is Genesis City, as genesis is', async () => {
+    const h = renderSession()
+    await enterAsGuest(h)
+    inWorld(h, 'boedo.dcl.eth')
+    act(() => h.session().chat.send('/goto main/100,100'))
+    expect(h.driver.sentOf('teleport')).toEqual([{ kind: 'teleport', realm: DEFAULT_REALM, x: 100, y: 100, spawnPoint: undefined, travelId: 2 }])
+    act(() => h.driver.emit({ kind: 'travelResult', travelId: 2, realm: DEFAULT_REALM, ok: true }))
+    expect(systemLines(h)).toEqual(['🟢 Welcome to Genesis City!'])
+  })
+
   it('x,y is a Genesis City parcel: a realm change from a world, a teleport in the city', async () => {
     const h = renderSession()
     await enterAsGuest(h)

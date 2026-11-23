@@ -9,7 +9,7 @@
 // so the engine splits it by its one rule (`console::line::split`), except the
 // HUD_HIDDEN_COMMANDS below; the engine itself only registers dev/cheat commands in preview mode.
 
-import { type GotoTarget, WORLD_PARCEL_LIMIT, isGenesisParcel, isWorldName, parseGotoTarget, worldName, worldOfRealm } from '../lobby/goto'
+import { type GotoTarget, isGenesisParcel, isWorldName, isWorldParcel, parseGotoTarget, worldName, worldOfRealm } from '../lobby/goto'
 
 export type ChatCommand =
   /** Not a command (no leading `/`) — send as a normal chat message. */
@@ -30,7 +30,7 @@ export type ChatCommand =
 
 // Each command's usage, as /help lists it and an invalid destination answers.
 const GOTO_USAGE =
-  '/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World\n  x,y, random and crowd are in Genesis City; genesis is the city, any other name is a world'
+  '/goto <x,y | x,y/spawn | random | crowd | world | world/x,y | world/spawn | world/x,y/spawn>\n  Teleport inside of Genesis or World\n  x,y, random and crowd are in Genesis City; genesis or main is the city, any other name is a world'
 const GOTO_LOCAL_USAGE = '/goto-local <x,y | x,y/spawn | spawn>\n  Teleport inside of the current realm'
 const WORLD_USAGE = '/world <world>\n  Jump to a world (alias of /goto world)'
 const usageReply = (usage: string): string => `🔴 Invalid parameters, usage:\n${usage}`
@@ -181,6 +181,8 @@ export type GotoPlan =
 const outside = (p: { x: number; y: number }): GotoPlan => ({ kind: 'reply', message: `🔴 Error: Parcel (${p.x}, ${p.y}) is outside of the bounds.` })
 const teleported = (p: { x: number; y: number }): string => `🟢 You teleported to ${p.x},${p.y}.`
 const REALM_URL = /^https?:\/\//i
+/** The names `/goto` reads as Genesis City, in any case. */
+const GENESIS_NAMES: ReadonlySet<string> = new Set(['genesis', 'main'])
 
 /**
  * A parcel alone is a Genesis City parcel, reached by a realm change from a world, unless `local`.
@@ -194,7 +196,7 @@ const REALM_URL = /^https?:\/\//i
 export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, genesisRealm: string): GotoPlan {
   const spawnPoint = target.spawnPoint ?? undefined
   const inGenesis = (p: { x: number; y: number }): boolean => isGenesisParcel(p.x, p.y)
-  const inWorld = (p: { x: number; y: number }): boolean => Math.abs(p.x) <= WORLD_PARCEL_LIMIT && Math.abs(p.y) <= WORLD_PARCEL_LIMIT
+  const inWorld = (p: { x: number; y: number }): boolean => isWorldParcel(p.x, p.y)
   if (target.world == null) {
     const parcel = target.parcel ?? here.parcel
     const genesisPlace = target.random || target.crowd
@@ -207,7 +209,7 @@ export function resolveGoto(target: GotoTarget, local: boolean, here: GotoHere, 
   }
 
   const name = target.world
-  const toGenesis = name.toLowerCase() === 'genesis'
+  const toGenesis = GENESIS_NAMES.has(name.toLowerCase())
   const url = REALM_URL.test(name)
   // a realm's address goes as it is, which the grammar reads whole: no parcel or spawn point comes
   // with it. Anything else has to be a world's name

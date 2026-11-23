@@ -185,8 +185,8 @@ tag (name, badges, distance, opacity, scale) and `/nametag_bubble` shows a test 
 - [ ] **Crosshair** shows when the camera is locked (mouse hidden) and hides when the cursor is free.
 - [ ] **Hover / proximity prompts** ("Press E…") show on interactables and sit on the right entity.
 - [ ] **`/goto` and `/goto-local`**: `/goto x,y` teleports in Genesis City and, from a world, changes
-      realm to it; `/goto world` and `world/x,y` travel; `random` and `crowd` are Genesis City places
-      from any realm; `/goto-local x,y` never changes realm. Each answers once in chat when the
+      realm to it; `/goto world` and `world/x,y` travel; `genesis` and `main` are Genesis City;
+      `random` and `crowd` are Genesis City places from any realm; `/goto-local x,y` never changes realm. Each answers once in chat when the
       engine does (`🟢 You teleported to x,y.`, `🟢 Welcome to the … world!`, `🟢 Welcome to Genesis
       City!`), a failure in chat alone with no travel notice beside it, a parcel out of bounds or a
       bad destination at once. In a scene preview `/goto x,y` moves inside the preview, and
@@ -199,7 +199,7 @@ tag (name, badges, distance, opacity, scale) and `/nametag_bubble` shows a test 
       spawn point of that name (the debug panel's Teleport section shows the name looked for and
       whether the scene had it). Tests: `library/ui/apps/hud/test/hosted/chatGoto.test.tsx` (the
       session), `library/explorer-core/features/chat/chatCommands.test.ts` (the destinations),
-      `src/test/bridgeTravel.test.ts` and `src/test/bridgeTeleport.test.ts` (the bridge).
+      `src/test/bridgeTravel.test.ts` (the bridge).
 - [ ] **Chat bubbles**: a message opens its author's tag into a bubble with a tail for 5 s (a new
       message restarts it); a long message wraps and is cut at 100 characters with an ellipsis; a message that @-mentions you has a pink-to-purple
       ring. A message said in a **community** chat by a player standing nearby shows the community's
