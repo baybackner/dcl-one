@@ -93,10 +93,13 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   is 1024. High's four cascades each cover a slice of the shadow distance: at 100 m and 200 m,
   2048 per cascade looked the same as 4096 and the frame took about 10 ms less (web, Apple M1,
   Genesis Plaza); 1024 saved 2 ms more and softened the contact shadows. Low's single cascade
-  spreads its map over the whole shadow distance, and the bias is in texels. At 20 m, 2048
-  looked the same as 4096 and took about 6 ms less. At 100 m the avatar's shadow went soft on
-  2048 and was a smudge at the feet on 1024, and 4096 cost under 1 ms. So Low uses 4096 past
-  40 m (`sun_shadow_map_size`), where a 2048 texel is as large as a 4096 texel at 80 m.
+  spreads its map over the whole shadow distance, and the bias is in texels. From 20 m to 60 m,
+  2048 looked the same as 4096 with the sun at 10:00 and at 15:00, and at 20 m took about 6 ms
+  less. At 100 m with the sun at 15:00, the shadows of a crowd 5 to 10 m from the camera were
+  mostly gone on 2048 and all gone on 1024. With a low sun, past about 75 m the avatar's shadow
+  was a smudge at the feet on 2048 and gone on 1024. 4096 costs under 1 ms at 100 m. So Low
+  uses 4096 past 40 m (`sun_shadow_map_size`), where a 2048 texel is as large as a 4096 texel
+  at 80 m.
 - **Sun shadows hold a floor past the shadow distance.** URP fades the shadow out completely at
   the shadow distance. We fade over the same squared-distance curve, but towards a partial
   shadow (`CASCADE_FAR_SHADOW` in `shadow_softening.wgsl`) that holds past the distance, so the
