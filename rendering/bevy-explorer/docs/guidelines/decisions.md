@@ -432,6 +432,41 @@ ends in "we don't do that", so the next person doesn't have to rediscover it.
   or 403 as forbidden access. The player is not moved out of a scene that refused them, as
   there. Other players' scene bans and
   the admins come from the room's metadata and count only while the room is connected, as there.
+- **Scene message trust is enforced in the engine.** Room metadata rejects banned senders
+  across the string bus, binary bus and topics. New rooms without metadata grant ordinary peer
+  permissions. Preview and local scene development trust peers, as Unity Explorer does for
+  local scene development, so shared VideoPlayer sources sync without room admins; bans still
+  outrank that trust. Metadata arrives as full snapshots. Missing or non-array lists retain
+  their last good values defensively; explicit arrays apply their valid addresses and warn about skipped entries; an empty array clears
+  its list. An entirely unusable non-empty ban array retains known bans; an entirely unusable
+  admin array clears admin trust.
+  Binary SDK CRDT batches and state responses exclude VideoControlState and the combined physics
+  force/impulse components in both directions; incoming VideoPlayer edits require a trusted
+  development realm, a room admin or the authoritative server. This protects the video source;
+  peers can still move, hide or delete its entity. An untrusted state response omits VideoPlayer, so late joiners need a trusted sender to
+  supply it. Filtering covers SDK envelopes 1 and 3. Auth-server SDK envelopes are
+  opaque: those clients accept CRDT only from the authoritative server, but local-only component
+  filtering for that generation is unverified. Malformed recognized CRDT packets are dropped.
+  Outgoing binary payloads are limited to 13,269 bytes, reserving a sender-length byte and 42
+  address bytes in Unity Explorer's 13 KiB receiver frame. Incoming binary payloads retain the
+  30,000-byte bus limit for older peers. Strings retain 30,000 bytes; topics retain 13 KiB.
+  Rejecting banned senders' scene messages is a deliberate divergence from Unity Explorer's
+  scene pipe, which gates component trust through admin status and does not check its ban list.
+- **Scene bans retain their admission owner.** A recognized scene/world refusal or local ban
+  in room metadata unloads the matching parcel scene, without moving the player or unloading
+  portable experiences. Refusals persist per scene across parcel changes within the wallet and
+  realm session; only fresh admission for that scene clears its refusal. The shared room credential
+  lifecycle rechecks admission with a minimum fifteen-second ban retry delay and honors longer
+  server delays. A transient failure cannot clear a known ban. Successful fresh admission
+  restores the scene while the player stays on or returns to its parcel. Leaving and returning
+  preserves the retry deadline, including a longer server delay. A removed scene-room participant
+  requests fresh admission; other room types retain their existing denial behavior. Preview,
+  local and headless scene lifecycles are exempt from local-player unloading. Teleport arrival
+  onto a refused parcel completes without waiting for the deliberately absent scene root.
+  Unloading is a deliberate divergence from Unity Explorer's minimap ban mark: it prevents
+  refused scene scripts from running while the player is nearby. A later platform refusal is
+  reported independently of the retained scene/world ban, so device bans reach platform status
+  even while the user stays on a scene that already refused them.
 - **Realm entry refused during a platform ban.** The realm change reads `PlatformBanStatus`
   (`common::platform_ban`) and, while a platform ban is known, refuses every request ("You are
   banned from Decentraland"), so the lobby's pick, a link held for the
