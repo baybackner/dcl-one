@@ -1010,16 +1010,15 @@ fn derived_materials_cull_back_faces_and_drop_the_emissive_strength() {
     }
 }
 
-/// the emission curve: faint under a factor of 0.1, 2.5 at 0.2, steep above
+/// the emission is linear in the factor: 12.5 at a factor of 1, nothing below 0
 #[test]
-fn avatar_emission_follows_the_gamma_curve() {
+fn avatar_emission_is_linear_in_the_factor() {
     for (factor, expected) in [
+        (-0.5, 0.0),
         (0.0, 0.0),
-        (0.05, 0.127),
-        (0.1, 0.535),
-        (0.2, 2.5),
-        (0.5, 18.75),
-        (1.0, 86.2),
+        (0.1, 1.25),
+        (0.25, 3.125),
+        (1.0, 12.5),
     ] {
         let got = avatar_emission(factor);
         assert!(

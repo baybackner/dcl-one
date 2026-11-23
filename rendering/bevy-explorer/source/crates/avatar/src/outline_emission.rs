@@ -168,8 +168,8 @@ fn outlined_particle_keeps_its_glow() {
     let outlined = px(512 - off, 512);
     let plain = px(512 + off, 512);
     println!("outlined {outlined:?}, not outlined {plain:?}");
-    // the emission alone is ~86 in blue; the lit part is ~1
-    assert!(plain[2] > 80.0, "the particle does not glow: {plain:?}");
+    // the emission alone is 12.5 in blue; the lit part is ~1
+    assert!(plain[2] > 12.0, "the particle does not glow: {plain:?}");
     assert!(
         outlined[2] > 0.95 * plain[2],
         "the outline took the glow: {outlined:?} against {plain:?}"

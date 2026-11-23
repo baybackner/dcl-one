@@ -1522,19 +1522,10 @@ pub struct AvatarMaterials(pub HashSet<AssetId<SceneMaterial>>);
 pub struct PreviousAvatar(Entity);
 
 /// An avatar's emission for one channel of a glTF emissive factor, in the toon lighting's output
-/// units (lit white is 1): five times the factor read as a gamma-encoded colour and decoded to
-/// linear (past 1 by a power of 2.2), times 2.5. A factor of 0.2 emits 2.5 and 1.0 about 86,
-/// while a factor under 0.1 stays faint. toon.wgsl undoes bound_material's x10 lift.
+/// units (lit white is 1): the factor times 5, taken as a linear value with no gamma decode, times
+/// 2.5, so a factor of 1 emits 12.5. toon.wgsl undoes bound_material's x10 lift.
 fn avatar_emission(factor: f32) -> f32 {
-    let gamma = factor.max(0.0) * 5.0;
-    let linear = if gamma <= 0.04045 {
-        gamma / 12.92
-    } else if gamma < 1.0 {
-        ((gamma + 0.055) / 1.055).powf(2.4)
-    } else {
-        gamma.powf(2.2)
-    };
-    linear * 2.5
+    factor.max(0.0) * 5.0 * 2.5
 }
 /// The camera-to-player dither's base opacity for avatars: an avatar fades as a whole, by the
 /// worst point of its capsule, so all of it shows the floor. Higher than text's for that reason.
