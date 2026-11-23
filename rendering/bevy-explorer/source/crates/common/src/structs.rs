@@ -1240,6 +1240,8 @@ pub struct AudioSettings {
     /// private calls and community voice streams
     pub voice_chat: i32,
     pub scene: i32,
+    /// scenes' video players, audio streams and livestreams
+    pub streaming: i32,
     pub system: i32,
     pub avatar: i32,
 }
@@ -1251,6 +1253,7 @@ impl Default for AudioSettings {
             voice: 100,
             voice_chat: 100,
             scene: 100,
+            streaming: 100,
             system: 100,
             avatar: 100,
         }
@@ -1266,6 +1269,9 @@ impl AudioSettings {
     }
     pub fn scene(&self) -> f32 {
         (self.scene * self.master) as f32 / 10_000.0
+    }
+    pub fn streaming(&self) -> f32 {
+        (self.streaming * self.master) as f32 / 10_000.0
     }
     pub fn system(&self) -> f32 {
         (self.system * self.master) as f32 / 10_000.0
@@ -2734,6 +2740,7 @@ mod tests {
                 voice: 40,
                 voice_chat: 100,
                 scene: 30,
+                streaming: 100,
                 system: 20,
                 avatar: 10,
             }

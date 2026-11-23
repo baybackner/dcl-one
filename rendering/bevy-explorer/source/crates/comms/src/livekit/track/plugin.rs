@@ -890,7 +890,7 @@ fn update_track_volume(
             proximity_microphone,
             voice_room,
             multiplier.map(|volume| **volume),
-            audio_settings.scene(),
+            audio_settings.streaming(),
         ) else {
             continue;
         };
@@ -906,14 +906,14 @@ fn scene_track_volume(
     proximity_microphone: bool,
     voice_room: bool,
     multiplier: Option<f32>,
-    scene_volume: f32,
+    streaming_volume: f32,
 ) -> Option<f32> {
     // Nearby and call microphone gains are owned by their respective panning systems.
     if proximity_microphone || voice_room {
         return None;
     }
     Some(super::finite_gain(
-        super::transmitter_volume(multiplier) * scene_volume,
+        super::transmitter_volume(multiplier) * streaming_volume,
     ))
 }
 
