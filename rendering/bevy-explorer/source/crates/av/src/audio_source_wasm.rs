@@ -95,6 +95,7 @@ impl WebAudio {
             instance,
             elapsed_time: 0.0,
             duration,
+            last_set: None,
         })
     }
 }
@@ -103,6 +104,8 @@ pub struct AudioGraph {
     pub instance: InstanceId,
     pub elapsed_time: f64,
     pub duration: f64,
+    /// The gain and pan last sent to the page for this instance.
+    pub last_set: Option<(f32, f32)>,
 }
 
 impl AudioGraph {
@@ -238,11 +241,15 @@ fn manage_audio_sources(
         }
 
         // PannerNode is -1 to 1, vs kira range of 0 to 1
-        send(AudioCommand::Set {
-            instance: instance.instance,
-            gain: source_volume * emitter_volume,
-            pan: panning * 2.0 - 1.0,
-        });
+        let gain_and_pan = (source_volume * emitter_volume, panning * 2.0 - 1.0);
+        if instance.last_set != Some(gain_and_pan) {
+            instance.last_set = Some(gain_and_pan);
+            send(AudioCommand::Set {
+                instance: instance.instance,
+                gain: gain_and_pan.0,
+                pan: gain_and_pan.1,
+            });
+        }
     }
 
     for (_, (_, instance)) in prev_instances.drain() {

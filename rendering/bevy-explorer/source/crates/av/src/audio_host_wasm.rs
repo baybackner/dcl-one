@@ -31,7 +31,7 @@ pub enum AudioCommand {
         buffer: AssetId<bevy_kira_audio::AudioSource>,
         offset: Option<f32>,
     },
-    /// Per-frame gain and pan (`pan` in the panner's -1..1 range).
+    /// Gain and pan (`pan` in the panner's -1..1 range), sent when either changes.
     Set {
         instance: InstanceId,
         gain: f32,
