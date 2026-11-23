@@ -427,8 +427,15 @@ pub fn update_mesh(
                 };
                 // the shared settings load MAIN_WORLD only, since the resolver's other
                 // consumers (colliders, raycasts) read the mesh cpu-side and never upload
-                if let Some(mesh) = meshes.get_mut(h_mesh.id()) {
-                    mesh.asset_usage |= RenderAssetUsages::RENDER_WORLD;
+                // a mutable borrow marks the mesh modified, and a modified mesh is copied,
+                // uploaded and specialised again, so borrow only while the flag is missing
+                let main_world_only = meshes.get(h_mesh.id()).is_some_and(|mesh| {
+                    !mesh.asset_usage.contains(RenderAssetUsages::RENDER_WORLD)
+                });
+                if main_world_only {
+                    if let Some(mesh) = meshes.get_mut(h_mesh.id()) {
+                        mesh.asset_usage |= RenderAssetUsages::RENDER_WORLD;
+                    }
                 }
                 // remove skin if mesh changed
                 if maybe_existing_mesh.map(|me| &me.0) != Some(&h_mesh) {
