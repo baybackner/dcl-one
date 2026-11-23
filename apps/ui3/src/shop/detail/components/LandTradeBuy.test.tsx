@@ -102,7 +102,7 @@ describe("LandTradeBuy", () => {
     await buy(LAND);
     await screen.findByText(APPROVAL_STILL_PENDING);
     // The approval to watch, on the listing's chain.
-    expect(screen.getByTestId("confirming-tx").getAttribute("href")).toBe(`https://polygonscan.com/tx/0x${"a".repeat(64)}`);
+    expect(screen.getByRole("link", { name: "View transaction" }).getAttribute("href")).toBe(`https://polygonscan.com/tx/0x${"a".repeat(64)}`);
     expect(screen.queryByText(/The purchase was sent/)).toBeNull();
     // No second Buy while the approval confirms: it would send a second approval.
     expect(screen.queryByTestId("order-buy")).toBeNull();

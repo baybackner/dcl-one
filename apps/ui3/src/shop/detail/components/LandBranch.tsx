@@ -10,7 +10,7 @@
 // components/Table/{TableContainer,TableContent}/*.tsx; icons vendored from webapp/src/images into landbranch-assets/.
 // Copyright 2020 Metaverse Holdings Ltd. (marketplace), Apache-2.0.
 
-import { useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useContext, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
 
@@ -39,6 +39,7 @@ import { useShopWallet } from "../../wallet/context";
 import LegacyOrderBuy from "./LegacyOrderBuy";
 import LandAtlas from "./LandAtlas";
 import LandTradeBuy from "./LandTradeBuy";
+import { useReadOnClose } from "../lib/useReadOnClose";
 import backIcon from "./landbranch-assets/onBack.png";
 import pinIcon from "./landbranch-assets/pin-land.svg";
 import jumpIcon from "./landbranch-assets/jump_in.svg";
@@ -353,17 +354,11 @@ function SaleRentBox({ result, land, account, onSignIn, onChanged }: SaleRentBox
   const [view, setView] = useState<"sale" | "rent">(!!order || !rentalOpen ? "sale" : "rent");
   const [buying, setBuying] = useState(false);
   // A sale that went out (confirmed, or still confirming) has this LAND and its order read again once its dialog
-  // closes, not while it shows: a read empties the page until it answers (refetch drops the token), and would take
-  // the dialog and its notice with it.
-  const readOnClose = useRef(false);
-  const readAgainOnClose = () => {
-    readOnClose.current = true;
-  };
+  // closes, or this box unmounts, not while it shows (refetch drops the token and would take the dialog with it).
+  const { arm: readAgainOnClose, fire: readIfBought } = useReadOnClose(onChanged);
   const closeBuy = () => {
     setBuying(false);
-    if (!readOnClose.current) return;
-    readOnClose.current = false;
-    onChanged();
+    readIfBought();
   };
   const [period, setPeriod] = useState<number | null>(null);
   const partOfEstate = land.kind === "parcel" && !!land.estate;

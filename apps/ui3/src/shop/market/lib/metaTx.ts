@@ -115,7 +115,7 @@ export async function sendMetaTransaction(opts: {
   /** Bound on the account and nonce reads before the prompt: a late answer ends the write unprompted and unposted. */
   readTimeoutMs?: number;
 }): Promise<string> {
-  const read = <T>(r: Promise<T>) => (opts.readTimeoutMs ? bounded(r, opts.readTimeoutMs) : r);
+  const read = <T>(r: Promise<T>) => (opts.readTimeoutMs !== undefined ? bounded(r, opts.readTimeoutMs) : r);
   const from = await read(walletAccount(opts.provider));
   const expected = opts.account?.toLowerCase();
   if (expected && from !== expected) throw new WalletAccountChangedError();
@@ -123,7 +123,7 @@ export async function sendMetaTransaction(opts: {
   const typed = metaTransactionTypedData(opts.contract, opts.kind, from, nonce, opts.functionData);
   const signature = await signTypedData(opts.provider, from, typed);
   if (expected) {
-    const signer = await recoverTypedDataAddress({ domain: typed.domain, types: typed.types, primaryType: typed.primaryType, message: typed.message, signature } as never);
+    const signer = await recoverTypedDataAddress({ ...typed, signature } as Parameters<typeof recoverTypedDataAddress>[0]);
     if (signer.toLowerCase() !== expected) throw new WalletAccountChangedError();
   }
   const txData = executeMetaTransactionData(opts.kind, from, signature, opts.functionData);

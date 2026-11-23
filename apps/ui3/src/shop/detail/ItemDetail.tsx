@@ -47,6 +47,7 @@ import { itemRoute, routeSegment, tokenRoute } from "../discovery/lib/routes";
 import { saleDiscountPct, saleUnitsHint } from "@shop/discovery/lib/sale";
 import { mergeSuggestions, SUGGESTIONS_TARGET } from "../discovery/lib/suggestions";
 import { invalidateShopQueries, useShopQuery } from "../discovery/query";
+import { useReadOnClose } from "./lib/useReadOnClose";
 import {
   fetchClassicItemOrders,
   fetchItemMeta,
@@ -477,17 +478,12 @@ export default function ItemDetail() {
   const saleActive = useSaleActive({ priceCredits: current.priceCredits, compareAtCredits: current.compareAtCredits, saleEndsAt: current.saleEndsAt });
   const [resaleListOpen, setResaleListOpen] = useState(false);
   const [buyingOrder, setBuyingOrder] = useState<{ order: LegacyOrderRef; quoted: ManaWei | null } | null>(null);
-  // An order that went out (confirmed, or still confirming) has the page read again once its dialog closes, not while
-  // it shows: the read drops the token until it answers, and would take the dialog and its notice with it.
-  const orderReadOnClose = useRef(false);
-  const readOrderAgainOnClose = () => {
-    orderReadOnClose.current = true;
-  };
+  // An order that went out (confirmed, or still confirming) has the page read again once its dialog closes, or the page
+  // unmounts, not while it shows: the read drops the token until it answers, and would take the dialog with it.
+  const { arm: readOrderAgainOnClose, fire: readIfOrdered } = useReadOnClose(invalidateShopQueries);
   const closeOrderBuy = () => {
     setBuyingOrder(null);
-    if (!orderReadOnClose.current) return;
-    orderReadOnClose.current = false;
-    invalidateShopQueries();
+    readIfOrdered();
   };
   const [buyingMixed, setBuyingMixed] = useState<{ line: CartAddInput; offer: PurchaseOffer; mixed: MixedPayment } | null>(null);
   // Buy now's dialog (upstream's BuyModal); `resume` when the page is back from the credits top-up it started. The query

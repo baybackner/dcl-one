@@ -16,7 +16,7 @@ export default function ConfirmingNotice({ outcome, chainId, onClose }: { outcom
       <p role="status">{outcome.kind === "pending" ? SALE_STILL_PENDING : APPROVAL_STILL_PENDING}</p>
       {href ? (
         <p>
-          <a href={href} target="_blank" rel="noreferrer" data-testid="confirming-tx">
+          <a href={href} target="_blank" rel="noreferrer">
             View transaction
           </a>
         </p>

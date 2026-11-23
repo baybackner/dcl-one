@@ -60,6 +60,14 @@ export class WalletAccountChangedError extends Error {
   }
 }
 
+/** An earlier MANA approval decision for the same account and spender has not ended (its wallet request may be stuck). */
+export class ApprovalBusyError extends Error {
+  override name = "ApprovalBusyError";
+  constructor() {
+    super("Another MANA approval for this account is still open in your wallet. Finish or reject it there, then try again. Nothing was sent.");
+  }
+}
+
 /** How long one chain read may take before it counts as a failed read. */
 export const READ_TIMEOUT_MS = 15_000;
 
@@ -129,7 +137,7 @@ export type WriteCall = {
 
 /** Sends one contract call from the wallet. Throws WrongNetworkError without prompting on another chain. */
 export async function sendCall(provider: Eip1193Provider, call: WriteCall): Promise<string> {
-  const read = <T>(r: Promise<T>) => (call.readTimeoutMs ? bounded(r, call.readTimeoutMs) : r);
+  const read = <T>(r: Promise<T>) => (call.readTimeoutMs !== undefined ? bounded(r, call.readTimeoutMs) : r);
   await read(requireChain(provider, call.chainId));
   const from = await read(walletAccount(provider));
   if (call.account && from !== call.account.toLowerCase()) throw new WalletAccountChangedError();

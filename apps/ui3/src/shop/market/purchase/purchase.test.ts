@@ -211,6 +211,7 @@ describe("a MANA approval still confirming", () => {
   let allowance = 0n;
   let allowanceDown = false;
   let nonceStalled = false;
+  let nonceNow = 0n;
   const pending = new Set<string>();
   const reverted = new Set<string>();
   const stalled = new Set<string>();
@@ -221,6 +222,7 @@ describe("a MANA approval still confirming", () => {
     allowance = 0n;
     allowanceDown = false;
     nonceStalled = false;
+    nonceNow = 0n;
     pending.clear();
     reverted.clear();
     stalled.clear();
@@ -236,7 +238,7 @@ describe("a MANA approval still confirming", () => {
         [MANA_POLYGON]: {
           abi: [...ERC20_ABI, ...COLLECTION_V2_ABI],
           answer: (fn) => {
-            if (fn === "getNonce" && nonceStalled) return STALL;
+            if (fn === "getNonce") return nonceStalled ? STALL : nonceNow;
             if (fn !== "allowance") return 0n;
             if (allowanceDown) throw new Error("the RPC is down");
             return allowance;
@@ -251,10 +253,11 @@ describe("a MANA approval still confirming", () => {
 
   /** A wallet whose account can change (or disconnect, or stop answering its account) between two purchases. */
   function switchable(first = fakeWallet()) {
-    const box: { current: ReturnType<typeof fakeWallet> | null; stallAccounts: boolean } = { current: first, stallAccounts: false };
+    const box: { current: ReturnType<typeof fakeWallet> | null; stallAccounts: boolean; stallSign: boolean } = { current: first, stallAccounts: false, stallSign: false };
     const provider: Eip1193Provider = {
       request: (args) => {
         if (box.stallAccounts && args.method === "eth_accounts") return new Promise(() => {});
+        if (box.stallSign && args.method === "eth_signTypedData_v4") return new Promise(() => {});
         if (box.current) return box.current.request(args);
         return args.method === "eth_accounts" ? Promise.resolve([]) : Promise.reject(new Error("disconnected"));
       },
@@ -339,6 +342,30 @@ describe("a MANA approval still confirming", () => {
     expect(first).toMatchObject({ status: "fulfilled", value: approvalHash(1) });
     expect(second).toMatchObject({ status: "rejected", reason: { name: "ReadTimeoutError" } });
     expect(relayed).toHaveLength(1);
+  });
+
+  it("a purchase queued behind one whose wallet request never settles gives up unsent, and so does the next", async () => {
+    const { provider, box } = switchable();
+    box.stallSign = true;
+    // The wallet dropped the signature request without rejecting it: this decision never ends.
+    void approve(provider).catch(() => {});
+    const behind = () => ensureManaAllowance({ provider, chainId: CHAIN.POLYGON, spender: SPENDER, amount: AMOUNT, wait: noWait, queueTimeoutMs: 20 });
+    await expect(behind()).rejects.toMatchObject({ name: "ApprovalBusyError" });
+    // Giving up does not let a later purchase past the stuck one.
+    await expect(behind()).rejects.toMatchObject({ name: "ApprovalBusyError" });
+    expect(relayed).toHaveLength(0);
+  });
+
+  it("a relayed approval whose hash never gets a receipt ends once the owner's nonce is past the one it signed", async () => {
+    pending.add(approvalHash(1));
+    const wallet = fakeWallet();
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    // Still unmined and the nonce has not moved: it still holds a second approval back.
+    await expect(approve(wallet)).rejects.toMatchObject({ name: "TxPendingError", txHash: approvalHash(1) });
+    // The relay's replacement ran (the nonce moved) and a sale spent that allowance; the first hash never mines.
+    nonceNow = 1n;
+    await expect(approve(wallet)).resolves.toBe(approvalHash(2));
+    expect(relayed).toHaveLength(2);
   });
 
   it("a purchase queued behind another ends unsent once the wallet disconnected", async () => {

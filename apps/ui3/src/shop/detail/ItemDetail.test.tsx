@@ -523,7 +523,8 @@ describe("a LAND legacy order, bought from its token page", () => {
       await act(async () => fireEvent.click(confirm));
       expect(await within(dialog).findByText(/Purchase complete/)).toBeTruthy();
       // Not read under the success: the read drops the token until it answers, and would take the dialog with it.
-      await act(async () => {});
+      // A whole task later (the page's reads answer as promises), still none.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
       expect(tokenReads).toBe(before);
       expect(screen.getByTestId("legacy-order-buy")).toBeTruthy();
 

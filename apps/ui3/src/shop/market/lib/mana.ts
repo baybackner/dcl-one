@@ -11,9 +11,9 @@ import type { Eip1193Provider } from "../../../data/auth/wallet";
 import { isPolygon, type ChainId } from "@shop/model/chain";
 import type { ManaWei } from "@shop/model/money";
 import { ERC20_ABI, manaToken } from "@shop/market/lib/contracts";
-import { sendMetaTransaction } from "./metaTx";
+import { readNonce, sendMetaTransaction } from "./metaTx";
 import { readContract, rpc } from "./rpc";
-import { bounded, isTxPending, READ_TIMEOUT_MS, sendCall, TxPendingError, waitForReceipt, walletAccount, WalletAccountChangedError, type WaitOptions } from "./tx";
+import { ApprovalBusyError, bounded, isTxPending, READ_TIMEOUT_MS, sendCall, TxPendingError, waitForReceipt, walletAccount, WalletAccountChangedError, type WaitOptions } from "./tx";
 
 export { parseManaInput } from "@shop/model/money";
 
@@ -33,36 +33,55 @@ export async function hasManaAllowance(chainId: ChainId, owner: string, spender:
 }
 
 /**
- * An approval this page sent whose end it has not seen (its wait ran out), per chain, owner and spender. Kept until
- * its own receipt says it mined or reverted, never released by time: while it stands, no second approval goes out
- * for that spender (it would only cost a second fee), and a purchase the allowance does not cover stops on its hash.
- * It lives in this page's memory: an approval dropped or replaced without a receipt holds a short allowance back until
- * the page is reloaded.
+ * An approval this page sent whose end it has not seen (its wait ran out), per chain, owner and spender, with the
+ * meta-transaction nonce it signed when it was relayed. Kept until its own receipt says it mined or reverted, or until
+ * the owner's meta-transaction nonce is past the one it signed (it can then never run: it ran, under this hash or a
+ * relay's replacement, or another write took that nonce). Never released by time: while it stands, no second approval
+ * goes out for that spender (it would only cost a second fee), and a purchase the allowance does not cover stops on its
+ * hash. It lives in this page's memory: a direct (Ethereum) approval dropped or replaced without a receipt holds a short
+ * allowance back until the page is reloaded.
  */
-const unconfirmedApprovals = new Map<string, string>();
-/** One approval decision at a time per key: the tail of the decisions queued on it. */
+type Unconfirmed = { hash: string; nonce?: bigint };
+const unconfirmedApprovals = new Map<string, Unconfirmed>();
+/** One approval decision at a time per key: what the next decision on that key waits for. */
 const approvalQueue = new Map<string, Promise<unknown>>();
 const approvalKey = (chainId: ChainId, owner: string, spender: string) => `${chainId}:${owner}:${spender.toLowerCase()}`;
+
+/** How long a purchase waits for an earlier approval decision on the same key (which may hold a wallet prompt). */
+const QUEUE_WAIT_MS = 60_000;
 
 export function resetUnconfirmedApprovalsForTests(): void {
   unconfirmedApprovals.clear();
   approvalQueue.clear();
 }
 
-/** An earlier approval's receipt, read once within `ms`: no receipt, or no answer in time, is "unknown". */
-async function approvalOutcome(chainId: ChainId, hash: string, ms: number): Promise<"mined" | "reverted" | "unknown"> {
+/** Whether an earlier approval has ended, read within `ms` each: its receipt, else its meta-transaction nonce. */
+async function approvalEnded(chainId: ChainId, owner: string, record: Unconfirmed, ms: number): Promise<boolean> {
   try {
-    const receipt = await bounded(rpc<{ status?: string } | null>(chainId, "eth_getTransactionReceipt", [hash]), ms);
-    return receipt?.status === "0x1" ? "mined" : receipt?.status === "0x0" ? "reverted" : "unknown";
+    const receipt = await bounded(rpc<{ status?: string } | null>(chainId, "eth_getTransactionReceipt", [record.hash]), ms);
+    if (receipt?.status === "0x1" || receipt?.status === "0x0") return true;
   } catch {
-    return "unknown";
+    // No answer in time: the nonce may still settle it.
+  }
+  if (record.nonce === undefined) return false;
+  try {
+    return (await bounded(readNonce(manaToken(chainId), owner), ms)) > record.nonce;
+  } catch {
+    return false;
   }
 }
 
-/** Runs `decide` after every decision already queued on `key`; queued synchronously, so two callers never interleave. */
-function serialized<T>(key: string, decide: () => Promise<T>): Promise<T> {
-  const mine = (approvalQueue.get(key) ?? Promise.resolve()).then(decide, decide);
-  const tail = mine.catch(() => {});
+/**
+ * Runs `decide` once every decision already queued on `key` has ended, queued synchronously so two callers never
+ * interleave. One that waits longer than `waitMs` ends with ApprovalBusyError, unsent; the decisions after it still
+ * wait for the earlier ones, so giving up never lets a later decision past a stuck one.
+ */
+function serialized<T>(key: string, decide: () => Promise<T>, waitMs: number): Promise<T> {
+  const prior = approvalQueue.get(key) ?? Promise.resolve();
+  const mine = bounded(prior, waitMs).then(decide, () => {
+    throw new ApprovalBusyError();
+  });
+  const tail = Promise.all([prior, mine.catch(() => {})]);
   approvalQueue.set(key, tail);
   void tail.then(() => {
     if (approvalQueue.get(key) === tail) approvalQueue.delete(key);
@@ -84,15 +103,15 @@ export async function ensureManaAllowance(opts: {
   spender: string;
   amount: bigint;
   wait?: WaitOptions;
-  /** The buyer the caller's purchase is bound to; the wallet's account when absent. */
+  /** The buyer the caller's purchase is bound to (checked against the wallet when its decision starts); the wallet's account when absent. */
   owner?: string;
+  /** How long to wait behind an earlier decision on the same key; tests shorten it. */
+  queueTimeoutMs?: number;
 }): Promise<string | null> {
   const ms = opts.wait?.readTimeoutMs ?? READ_TIMEOUT_MS;
-  const current = await bounded(walletAccount(opts.provider), ms);
-  const owner = opts.owner?.toLowerCase() ?? current;
-  if (current !== owner) throw new WalletAccountChangedError();
+  const owner = opts.owner?.toLowerCase() ?? (await bounded(walletAccount(opts.provider), ms));
   const key = approvalKey(opts.chainId, owner, opts.spender);
-  return serialized(key, () => decideApproval(opts, owner, key));
+  return serialized(key, () => decideApproval(opts, owner, key), opts.queueTimeoutMs ?? QUEUE_WAIT_MS);
 }
 
 /** Throws unless the wallet is still on `owner`, read within `ms` (a disconnected wallet throws walletAccount's own error). */
@@ -110,15 +129,15 @@ async function decideApproval(
   const covered = () => bounded(hasManaAllowance(opts.chainId, owner, opts.spender, opts.amount), ms);
   const earlier = unconfirmedApprovals.get(key);
   if (earlier) {
-    if ((await approvalOutcome(opts.chainId, earlier, ms)) === "unknown") {
+    if (!(await approvalEnded(opts.chainId, owner, earlier, ms))) {
       // A covering allowance lets this purchase pass, but says nothing about the earlier approval: it stays recorded.
       if (await covered().catch(() => false)) {
         await stillOn(opts.provider, owner, ms);
         return null;
       }
-      throw new TxPendingError(earlier, "The MANA approval");
+      throw new TxPendingError(earlier.hash, "The MANA approval");
     }
-    // Mined or reverted: it no longer holds a second approval back.
+    // Ended: it no longer holds a second approval back.
     if (unconfirmedApprovals.get(key) === earlier) unconfirmedApprovals.delete(key);
   }
   let enough: boolean;
@@ -132,24 +151,32 @@ async function decideApproval(
     return null;
   }
   const mana = manaToken(opts.chainId);
-  const hash = isPolygon(opts.chainId)
-    ? await sendMetaTransaction({
-        provider: opts.provider,
-        contract: mana,
-        kind: "collection",
-        functionData: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [opts.spender as `0x${string}`, opts.amount] }),
-        account: owner,
-        readTimeoutMs: ms,
-      })
-    : await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount], account: owner, readTimeoutMs: ms });
-  unconfirmedApprovals.set(key, hash);
+  let record: Unconfirmed;
+  if (isPolygon(opts.chainId)) {
+    // The nonce it signs is recorded with it: once the owner's nonce is past it, the approval can never run.
+    const nonce = await bounded(readNonce(mana, owner), ms);
+    const hash = await sendMetaTransaction({
+      provider: opts.provider,
+      contract: mana,
+      kind: "collection",
+      functionData: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [opts.spender as `0x${string}`, opts.amount] }),
+      nonce,
+      account: owner,
+      readTimeoutMs: ms,
+    });
+    record = { hash, nonce };
+  } else {
+    const hash = await sendCall(opts.provider, { chainId: opts.chainId, to: mana.address, abi: ERC20_ABI, functionName: "approve", args: [opts.spender, opts.amount], account: owner, readTimeoutMs: ms });
+    record = { hash };
+  }
+  unconfirmedApprovals.set(key, record);
   try {
-    const confirmed = await waitForReceipt(opts.chainId, hash, "The MANA approval", opts.wait);
-    if (unconfirmedApprovals.get(key) === hash) unconfirmedApprovals.delete(key);
+    const confirmed = await waitForReceipt(opts.chainId, record.hash, "The MANA approval", opts.wait);
+    if (unconfirmedApprovals.get(key) === record) unconfirmedApprovals.delete(key);
     return confirmed;
   } catch (e) {
     // Reverted: ended. Still pending (an unanswered read included): kept for the next decision to reconcile.
-    if (!isTxPending(e) && unconfirmedApprovals.get(key) === hash) unconfirmedApprovals.delete(key);
+    if (!isTxPending(e) && unconfirmedApprovals.get(key) === record) unconfirmedApprovals.delete(key);
     throw e;
   }
 }
