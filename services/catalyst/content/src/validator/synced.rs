@@ -11,9 +11,10 @@
 //!   anything) counts every content file as present.
 //! - the auth chain: expiry against the entity timestamp, an expiration that
 //!   parses as no known date kept as the peer's verdict, a contract-wallet
-//!   link asked of the node's EIP-1654 validator at the last block at or
-//!   before the entity timestamp (none configured, or an RPC that cannot
-//!   answer for that block: undecidable).
+//!   link asked of the node's EIP-1654 validator at the latest block, then
+//!   at the last block at or before the entity timestamp, as a local deploy
+//!   (no validator, a block search that fails, or an RPC that cannot answer
+//!   for that block: undecidable).
 //! - items, as the reference validator: no thumbnail check, and pointers
 //!   naming one collections-v1 asset by address and by name count as one.
 //! - a timestamp more than `REQUEST_TTL_FORWARDS_MS` ahead of this node's
@@ -97,7 +98,6 @@ impl ExternalCalls for Synced<'_> {
         let at_block = self.sources.eip1654().map(|inner| AtEntityBlock {
             inner,
             sources: self.sources,
-            timestamp_ms: timestamp,
         });
         let verdict = verify_synced_auth_chain(
             auth_chain,
@@ -113,12 +113,11 @@ impl ExternalCalls for Synced<'_> {
     }
 }
 
-/// The node's EIP-1654 validator asked at the last L1 block at or before the
+/// The node's EIP-1654 validator, its historical block the last L1 block at or before the
 /// entity timestamp, found by the search the access checks share.
 struct AtEntityBlock<'a> {
     inner: &'a dyn Eip1654Validator,
     sources: &'a Sources,
-    timestamp_ms: i64,
 }
 
 #[async_trait]
@@ -129,19 +128,31 @@ impl Eip1654Validator for AtEntityBlock<'_> {
         hash: &[u8],
         signature: &[u8],
     ) -> Result<bool, AuthError> {
-        let block = self
-            .sources
-            .access
-            .l1_block_at(self.timestamp_ms)
+        self.inner
+            .validate_signature(contract_address, hash, signature)
             .await
-            .map_err(|e| AuthError::Eip1654ValidationFailed(e.to_string()))?;
-        // Before the first block no contract could have signed.
-        let Some(block) = block else {
-            return Ok(false);
-        };
+    }
+
+    async fn validate_signature_at_block(
+        &self,
+        contract_address: &str,
+        hash: &[u8],
+        signature: &[u8],
+        block: u64,
+    ) -> Result<bool, AuthError> {
         self.inner
             .validate_signature_at_block(contract_address, hash, signature, block)
             .await
+    }
+
+    /// A failed search, an unset L1 RPC included, is undecidable; before the first block the
+    /// latest answer stands.
+    async fn verification_time_block(&self, timestamp_ms: i64) -> Result<Option<u64>, AuthError> {
+        self.sources
+            .access
+            .l1_block_at(timestamp_ms)
+            .await
+            .map_err(|e| AuthError::Eip1654ValidationFailed(e.to_string()))
     }
 }
 
@@ -514,14 +525,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(tmp);
     }
 
-    /// Records the block each historical ask names.
+    /// A contract wallet that refuses at latest and signed at every past block; records each
+    /// ask, `None` for latest.
     #[derive(Default)]
-    struct AsksAt(std::sync::Mutex<Vec<u64>>);
+    struct AsksAt(std::sync::Mutex<Vec<Option<u64>>>);
 
     #[async_trait]
     impl Eip1654Validator for AsksAt {
         async fn validate_signature(&self, _: &str, _: &[u8], _: &[u8]) -> Result<bool, AuthError> {
-            panic!("a synced link is never asked at latest")
+            self.0.lock().unwrap().push(None);
+            Ok(false)
         }
 
         async fn validate_signature_at_block(
@@ -531,46 +544,52 @@ mod tests {
             _: &[u8],
             block: u64,
         ) -> Result<bool, AuthError> {
-            self.0.lock().unwrap().push(block);
+            self.0.lock().unwrap().push(Some(block));
             Ok(true)
         }
     }
 
+    /// A synced contract-wallet link is asked at latest, then at the block the access checks
+    /// found for the entity timestamp, as `@dcl/crypto` does.
     #[tokio::test]
-    async fn a_contract_wallet_is_asked_at_the_block_the_access_checks_found() {
+    async fn a_contract_wallet_is_asked_at_latest_then_at_the_block_the_access_checks_found() {
         use super::super::fake_chain::{self, GENESIS, INTERVAL};
         let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
         let (storage, tmp) = crate::sync_test_support::temp_storage("synced-block").await;
+        let asks = std::sync::Arc::new(AsksAt::default());
         let sources = Sources::new(
             sqlx::PgPool::connect_lazy("postgres://nobody@127.0.0.1:1/none").unwrap(),
             storage,
             crate::http::Outbound::for_tests(),
-            None,
+            Some(asks.clone()),
             super::super::Settings {
                 eth_network: "mainnet".into(),
                 l1_rpc_url: Some(chain.url.clone()),
                 ..Default::default()
             },
         );
-        let asks = AsksAt::default();
-        let at = |timestamp_ms| AtEntityBlock {
-            inner: &asks,
+        let synced = Synced {
             sources: &sources,
-            timestamp_ms,
+            content: SyncedContent::Fetched,
+            trusted_expirations: Mutex::new(Vec::new()),
         };
+        let id = "bafkreientity";
+        let auth =
+            crate::sync_test_support::signed_chain_behind_contract(id, "2099-01-01T00:00:00.000Z")
+                .await;
         let timestamp_ms = 1_700_000_000_500;
 
         sources.access.l1_block_at(timestamp_ms).await.unwrap();
         chain.clear();
-        assert!(
-            at(timestamp_ms)
-                .validate_signature("0xabc", &[0; 32], &[0; 65])
-                .await
-                .unwrap()
-        );
+        synced
+            .validate_signature(id, &auth, timestamp_ms)
+            .await
+            .unwrap();
+        let block = ((1_700_000_000 - GENESIS) / INTERVAL) as u64;
         assert_eq!(
-            *asks.0.lock().unwrap(),
-            [((1_700_000_000 - GENESIS) / INTERVAL) as u64]
+            std::mem::take(&mut *asks.0.lock().unwrap()),
+            [None, None, Some(block)],
+            "both hashes at latest, then the entity block"
         );
         assert!(
             chain.calls().is_empty(),
@@ -579,14 +598,15 @@ mod tests {
         );
 
         let before_genesis = (GENESIS - 1) * 1000;
+        let err = synced
+            .validate_signature(id, &auth, before_genesis)
+            .await
+            .unwrap_err();
         assert!(
-            !at(before_genesis)
-                .validate_signature("0xabc", &[0; 32], &[0; 65])
-                .await
-                .unwrap(),
-            "no block yet: a refusal"
+            matches!(err, AuthError::Eip1654Rejected { .. }),
+            "no block yet: the latest refusal stands: {err}"
         );
-        assert_eq!(asks.0.lock().unwrap().len(), 1);
+        assert_eq!(*asks.0.lock().unwrap(), [None, None]);
         let _ = std::fs::remove_dir_all(tmp);
     }
 
