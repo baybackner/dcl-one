@@ -92,19 +92,23 @@ fn manage_player_visibility(
                 .length();
 
         // the photo camera may pass through the head; the avatar stays whole for the photo
-        #[allow(clippy::collapsible_else_if)]
-        if distance < 0.5 && !photo_mode {
-            layers.0 = layers
+        let new_layers = if distance < 0.5 && !photo_mode {
+            layers
                 .0
                 .clone()
                 .with(PRIMARY_AVATAR_LIGHT_LAYER_INDEX)
-                .without(0);
+                .without(0)
         } else {
-            layers.0 = layers
+            layers
                 .0
                 .clone()
                 .with(0)
-                .without(PRIMARY_AVATAR_LIGHT_LAYER_INDEX);
+                .without(PRIMARY_AVATAR_LIGHT_LAYER_INDEX)
+        };
+        // an assignment marks the component changed, and propagation then re-inserts the
+        // inherited layers on the player and compares them against each of its children
+        if layers.0 != new_layers {
+            layers.0 = new_layers;
         }
     }
 }
