@@ -8,14 +8,16 @@ vi.hoisted(() => {
   Object.assign(window, { __vite_plugin_react_preamble_installed__: true });
 });
 
+import { CatalystError } from "@/data/lib/catalyst/client";
+
 import CastConsole, { type LiveBindings } from "./CastConsole";
 import type { GoLiveFn, RequestPermissionsFn, ResolveTokenFn } from "./machine";
 
 const INFO = { placeName: "Test Plaza", placeId: "p1", location: "1,2", isWorld: false };
 const CREDENTIALS = { url: "wss://livekit.test", token: "jwt", roomId: "room-1", identity: "Ada" };
 
-function setup(opts: { requestPermissions?: RequestPermissionsFn } = {}) {
-  const resolveToken = vi.fn<ResolveTokenFn>(async () => ({ info: INFO }));
+function setup(opts: { requestPermissions?: RequestPermissionsFn; resolveToken?: ResolveTokenFn; live?: Partial<LiveBindings> } = {}) {
+  const resolveToken = vi.fn<ResolveTokenFn>(opts.resolveToken ?? (async () => ({ info: INFO })));
   const requestPermissions = vi.fn<RequestPermissionsFn>(
     opts.requestPermissions ?? (async () => ({ granted: true })),
   );
@@ -35,6 +37,8 @@ function setup(opts: { requestPermissions?: RequestPermissionsFn } = {}) {
     audioBlocked: false,
     enableAudio: vi.fn(),
     participants: 1,
+    reconnecting: false,
+    ...opts.live,
   };
   const Page = () => (
     <CastConsole
@@ -72,6 +76,7 @@ describe("the Cast speaker page", () => {
     expect(requestPermissions).toHaveBeenCalledTimes(1);
     expect(goLive.mock.calls[0]![0]).toMatchObject({ token: "stream-key", identity: "Ada" });
     expect(await screen.findByRole("button", { name: "Leave stream" })).toBeTruthy();
+    expect(screen.getByText("LIVE")).toBeTruthy();
     // The design is the whole UI: no second, unstyled set of controls.
     expect(container.querySelector(".cast-console__controls")).toBeNull();
   });
@@ -104,5 +109,37 @@ describe("the Cast speaker page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Leave stream" }));
     await waitFor(() => expect(endCast).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("Your cast has ended")).toBeTruthy();
+  });
+
+  it("offers Rejoin when the cast has ended, back to the lobby of the same link", async () => {
+    const { goLive } = setup();
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Leave stream" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Rejoin" }));
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    await waitFor(() => expect(goLive).toHaveBeenCalledTimes(2));
+  });
+
+  it("names a link check that failed, and Retry opens the lobby", async () => {
+    let fail = true;
+    setup({
+      resolveToken: async () => {
+        if (fail) throw new CatalystError("Cast request failed: Failed to fetch", "u");
+        return { info: INFO };
+      },
+    });
+    expect(await screen.findByText("Cast request failed: Failed to fetch")).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "JOIN NOW" })).toBeTruthy();
+  });
+
+  it("tells the streamer, without LIVE, that the viewers do not receive the Cast while it reconnects", async () => {
+    setup({ live: { reconnecting: true } });
+    fireEvent.click(await screen.findByRole("button", { name: "JOIN NOW" }));
+    await screen.findByRole("button", { name: "Leave stream" });
+    expect(screen.getByText(/Your viewers do not receive your Cast/).closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByText("LIVE")).toBeNull();
   });
 });

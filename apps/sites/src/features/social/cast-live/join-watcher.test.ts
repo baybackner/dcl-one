@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthIdentity } from "@/data/lib/auth/types";
 import { CatalystError } from "@/data/lib/catalyst/client";
 
-import { joinAsWatcher, type WatchDeps } from "./LiveCastWatch";
+import { NO_ANSWER } from "../cast-stream/machine";
+import { answeredIn, joinAsWatcher, type WatchDeps } from "./LiveCastWatch";
 import type { CastSession } from "./session";
 
 const identity = { signer: "0x00000000000000000000000000000000000abcd1" } as unknown as AuthIdentity;
@@ -67,5 +68,20 @@ describe("joinAsWatcher", () => {
     };
     expect(await joinAsWatcher(identity, { location: "10,10" }, controller.signal, deps)).toBeNull();
     expect(join).not.toHaveBeenCalled();
+  });
+
+  it("stops a join nobody answers at its bound with the reason, and drops the room if it connects later", async () => {
+    const session = fakeSession();
+    let connect: (s: CastSession) => void = () => {};
+    const deps: WatchDeps = {
+      getToken: vi.fn(async () => CREDS),
+      join: vi.fn(() => new Promise<CastSession>((resolve) => (connect = resolve))),
+    };
+    const joined = answeredIn(5, new AbortController().signal, (signal) =>
+      joinAsWatcher(identity, { location: "10,10" }, signal, deps),
+    );
+    await expect(joined).rejects.toThrow(NO_ANSWER);
+    connect(session);
+    await vi.waitFor(() => expect(session.disconnect).toHaveBeenCalledTimes(1));
   });
 });

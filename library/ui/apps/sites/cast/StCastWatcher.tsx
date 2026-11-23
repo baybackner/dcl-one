@@ -177,6 +177,8 @@ type StCastWatcherProps = {
   stage?: ReactNode
   /** Chat lines in the sidebar; defaults to the demo conversation. */
   messages?: ChatMessage[]
+  /** The live view without the LIVE pill: the Cast does not arrive. */
+  reconnecting?: boolean
 }
 
 export default function StCastWatcher({
@@ -197,7 +199,8 @@ export default function StCastWatcher({
   participantCount = 12,
   unreadCount = 0,
   stage,
-  messages = DEMO_MESSAGES
+  messages = DEMO_MESSAGES,
+  reconnecting = false
 }: StCastWatcherProps) {
   const onboardTitle = `Decentraland Cast from ${streamName}`
 
@@ -252,7 +255,7 @@ export default function StCastWatcher({
                   <WatcherEmptyState title={watcherTitle} message={watcherMessage} />
                 ) : (
                   <>
-                    <LivePill label={liveLabel} />
+                    {!reconnecting && <LivePill label={liveLabel} />}
                     {stage ? (
                       <div className="stcastwatcher__stage">{stage}</div>
                     ) : (
@@ -316,7 +319,9 @@ export default function StCastWatcher({
                 </button>
                 <button type="button" className="stcastwatcher__iconbtn" aria-label="Participants">
                   <PeopleIcon />
-                  <span className="stcastwatcher__badge">{participantCount}</span>
+                  {participantCount > 0 && (
+                    <span className="stcastwatcher__badge">{participantCount}</span>
+                  )}
                 </button>
               </div>
             </div>

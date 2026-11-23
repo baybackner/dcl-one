@@ -4,7 +4,18 @@ import type { Room, RoomEvent as RoomEventEnum, Track, TrackPublication } from "
 
 import type { CastCredentials } from "@/data/lib/catalyst/cast";
 
-import type { CastSource, StageCandidate } from "./stage";
+import { isPerson, type CastSource, type StageCandidate } from "./stage";
+
+/** Remote media that did not advance for this long is stalled (seen 6 to 8 s after its last frame). */
+export const STALL_MS = 6_000;
+const SAMPLE_MS = 2_000;
+/** A reconnection that lasts this long ends the session, and the page joins again or says so.
+ * LiveKit's own end can never come: Firefox closes a refused signal socket with no `open` and no
+ * `error` event, livekit-client 2.22.4 waits for one of the two with its connect lock held, and
+ * every later attempt waits for that lock. A watcher loses nothing in a new join. A streamer
+ * loses its screen share and must press Rejoin, so it waits as long as LiveKit's own retries
+ * are known to succeed (a 90 s outage). */
+export const RECONNECT_LIMIT_MS = { watcher: 30_000, streamer: 120_000 };
 
 export type StageTrack = StageCandidate & {
   /** Stable key for rendering. */
@@ -15,7 +26,13 @@ export type StageTrack = StageCandidate & {
 export type CastSession = {
   /** Every subscribed or local track, live. */
   tracks: () => StageTrack[];
+  /** The people in the room (`isPerson`), this page's own included. */
   participantCount: () => number;
+  /** Another participant has an unmuted track: the Cast is live. */
+  onAir: () => boolean;
+  /** What LiveKit restores: `signal` (media can still flow), or `all` (none does; also while the
+   * server reports this page's media lost). Null while connected. */
+  reconnecting: () => "signal" | "all" | null;
   /** Fires on any change of tracks, participants, audio playback or connection. */
   subscribe: (listener: () => void) => () => void;
   setMicrophone: (on: boolean) => Promise<void>;
@@ -23,11 +40,14 @@ export type CastSession = {
   /** False when the browser refused or the viewer cancelled the picker. */
   setScreenShare: (on: boolean) => Promise<boolean>;
   isPublishing: (source: "microphone" | "camera" | "screen_share") => boolean;
-  /** False while the browser blocks playback until a user gesture (Safari). */
+  /** False while the browser blocks playback until a user gesture (Safari): the room says so and
+   * a remote audio element is paused. The room alone can be wrong: it also says so when its
+   * AudioContext is not running 200 ms after the join (Firefox), with every element playing. */
   canPlaybackAudio: () => boolean;
   /** Unblocks audio playback; call it from a click. */
   startAudio: () => Promise<void>;
-  /** True once the room is gone: the server closed it, removed us, or reconnection gave up. */
+  /** True once the room is gone: the server closed it, removed us, or reconnection gave up or
+   * lasted its `RECONNECT_LIMIT_MS`. */
   disconnected: () => boolean;
   disconnect: () => Promise<void>;
 };
@@ -35,7 +55,7 @@ export type CastSession = {
 /** What a streamer publishes on joining. */
 export type Publish = { microphone: boolean; camera: boolean };
 
-function candidate(pub: TrackPublication, identity: string, local: boolean): StageTrack | null {
+function candidate(pub: TrackPublication, identity: string, local: boolean, stalled: Set<Track>): StageTrack | null {
   const track = pub.track;
   if (!track) return null;
   return {
@@ -44,6 +64,7 @@ function candidate(pub: TrackPublication, identity: string, local: boolean): Sta
     source: pub.source as CastSource,
     muted: pub.isMuted,
     local,
+    stalled: stalled.has(track),
     track,
   };
 }
@@ -62,38 +83,102 @@ function watchedEvents(RoomEvent: typeof RoomEventEnum): RoomEventEnum[] {
     RoomEvent.ParticipantConnected,
     RoomEvent.ParticipantDisconnected,
     RoomEvent.AudioPlaybackStatusChanged,
+    RoomEvent.ConnectionQualityChanged,
   ];
 }
 
+/** A count that grows while a remote track's media arrives: decoded frames, or audio packets. */
+async function progressOf(track: Track): Promise<number> {
+  let count = NaN;
+  const stats = await track.getRTCStatsReport().catch(() => undefined);
+  stats?.forEach((r) => {
+    if (r.type === "inbound-rtp") count = r.framesDecoded ?? r.packetsReceived;
+  });
+  return count;
+}
+
 /** Wraps a connected room. Exported for tests, which pass a stand-in room. */
-export function sessionOf(room: Room, RoomEvent: typeof RoomEventEnum): CastSession {
+export function sessionOf(
+  room: Room,
+  RoomEvent: typeof RoomEventEnum,
+  reconnectLimitMs = RECONNECT_LIMIT_MS.watcher,
+): CastSession {
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((l) => l());
-  let closed = false;
   for (const ev of watchedEvents(RoomEvent)) room.on(ev, notify);
-  // The flag is set before anyone is told, so a listener reads `disconnected() === true`.
-  room.on(RoomEvent.Disconnected, () => {
-    closed = true;
+  const remotes = () => [...room.remoteParticipants.values()];
+  const remotePubs = () => remotes().flatMap((p) => [...p.trackPublications.values()]);
+
+  // Each remote track's count and when it last moved.
+  const progress = new WeakMap<Track, { count: number; at: number }>();
+  let stalled = new Set<Track>();
+  const sample = async () => {
+    const next = new Set<Track>();
+    for (const { track, isMuted, isEnabled } of remotePubs()) {
+      if (!track) continue;
+      // A muted track, and one the page switched off (not on the stage, a hidden tab), sends
+      // nothing by design. NaN equals nothing, so such a track is never stalled.
+      const count = isMuted || !isEnabled ? NaN : await progressOf(track);
+      const last = progress.get(track);
+      if (last?.count !== count) progress.set(track, { count, at: Date.now() });
+      else if (Date.now() - last.at >= STALL_MS) next.add(track);
+    }
+    if (next.size !== stalled.size || [...next].some((t) => !stalled.has(t))) {
+      stalled = next;
+      notify();
+    }
+  };
+  const sampler = setInterval(() => void sample(), SAMPLE_MS);
+
+  // An element that starts to play changes `canPlaybackAudio`, and no room event says so.
+  room.on(RoomEvent.TrackSubscribed, (track) =>
+    track.on("elementAttached", (element) => element.addEventListener("playing", notify)),
+  );
+  const audioElements = () =>
+    remotePubs().flatMap((pub) => (pub.kind === "audio" ? (pub.track?.attachedElements ?? []) : []));
+
+  // livekit-client's `ConnectionState`, set before anyone is told: a listener reads
+  // `disconnected() === true`.
+  let link = "connected";
+  let limit: ReturnType<typeof setTimeout> | undefined;
+  const settle = (to: string) => {
+    link = to;
+    if (to === "reconnecting" || to === "signalReconnecting") {
+      limit ??= setTimeout(() => void room.disconnect(), reconnectLimitMs);
+    } else {
+      clearTimeout(limit);
+      limit = undefined;
+    }
+    if (to === "disconnected") clearInterval(sampler);
     notify();
-  });
+  };
+  room.on(RoomEvent.ConnectionStateChanged, settle);
 
   return {
     tracks: () => {
       const out: StageTrack[] = [];
       const local = room.localParticipant;
       for (const pub of local.trackPublications.values()) {
-        const c = candidate(pub, local.identity, true);
+        const c = candidate(pub, local.identity, true, stalled);
         if (c) out.push(c);
       }
       for (const p of room.remoteParticipants.values()) {
         for (const pub of p.trackPublications.values()) {
-          const c = candidate(pub, p.identity, false);
+          const c = candidate(pub, p.identity, false, stalled);
           if (c) out.push(c);
         }
       }
       return out;
     },
-    participantCount: () => room.remoteParticipants.size + 1,
+    participantCount: () =>
+      1 + remotes().filter((p) => isPerson(p.identity, p.trackPublications.size > 0)).length,
+    onAir: () => remotePubs().some((pub) => !pub.isMuted),
+    reconnecting: () =>
+      link === "signalReconnecting"
+        ? "signal"
+        : link === "reconnecting" || room.localParticipant.connectionQuality === "lost"
+          ? "all"
+          : null,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {
@@ -124,16 +209,15 @@ export function sessionOf(room: Room, RoomEvent: typeof RoomEventEnum): CastSess
       }
       return false;
     },
-    canPlaybackAudio: () => room.canPlaybackAudio,
+    canPlaybackAudio: () => room.canPlaybackAudio || !audioElements().some((element) => element.paused),
     startAudio: async () => {
       await room.startAudio();
       notify();
     },
-    disconnected: () => closed,
+    disconnected: () => link === "disconnected",
     disconnect: async () => {
-      if (!closed) await room.disconnect();
-      closed = true;
-      notify();
+      if (link !== "disconnected") await room.disconnect();
+      settle("disconnected");
     },
   };
 }
@@ -147,7 +231,7 @@ export async function joinCast(
 ): Promise<CastSession> {
   const { Room, RoomEvent } = await import("livekit-client");
   const room: Room = new Room({ adaptiveStream: true, dynacast: true });
-  const session = sessionOf(room, RoomEvent);
+  const session = sessionOf(room, RoomEvent, RECONNECT_LIMIT_MS[opts.publish ? "streamer" : "watcher"]);
   await room.connect(credentials.url, credentials.token);
   if (opts.signal?.aborted) {
     await session.disconnect();

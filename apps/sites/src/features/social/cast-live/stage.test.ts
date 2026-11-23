@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { isCastPublisher, pickWatcherStage, streamerStage, type StageCandidate } from "./stage";
+import { isCastPublisher, isPerson, pickWatcherStage, stalledCast, streamerStage, type StageCandidate } from "./stage";
 
 const t = (identity: string, source: StageCandidate["source"], extra: Partial<StageCandidate> = {}) => ({
   identity,
   source,
   muted: false,
   local: false,
+  stalled: false,
   ...extra,
 });
 
@@ -21,6 +22,12 @@ describe("pickWatcherStage", () => {
       pickWatcherStage([t(wallet, "screen_share"), t(bot, "screen_share"), t(streamer, "camera")])?.identity,
     ).toBe(bot);
     expect(pickWatcherStage([t(wallet, "camera")])?.identity).toBe(wallet);
+  });
+
+  it("shows a track that advances before a stalled one, and a stalled one when nothing else is there", () => {
+    const slide = t("presentation-bot:room:uuid", "screen_share", { stalled: true });
+    expect(pickWatcherStage([slide, t("stream:place-1:uuid", "camera")])?.source).toBe("camera");
+    expect(pickWatcherStage([slide])).toBe(slide);
   });
 
   it("never shows a muted track, audio, or nothing at all", () => {
@@ -55,5 +62,39 @@ describe("isCastPublisher", () => {
     expect(isCastPublisher("presentation-bot:room:uuid")).toBe(true);
     expect(isCastPublisher("watch:room:uuid")).toBe(false);
     expect(isCastPublisher("0xabc")).toBe(false);
+  });
+});
+
+describe("isPerson", () => {
+  it("counts a watcher, a wallet in the scene and a streamer that publishes", () => {
+    expect(isPerson("watch:room:uuid", false)).toBe(true);
+    expect(isPerson("0xabc", false)).toBe(true);
+    expect(isPerson("stream:place:access:uuid", true)).toBe(true);
+  });
+
+  it("never counts the presentation bot, the RTMP ingress or a stream key's connection that publishes nothing", () => {
+    expect(isPerson("presentation-bot:room:access:uuid", true)).toBe(false);
+    expect(isPerson("0b9d2f6e-1c57-4c1e-9a53-0d7c1c2a4e11-streamer", true)).toBe(false);
+    expect(isPerson("stream:place:access:uuid", false)).toBe(false);
+  });
+});
+
+describe("stalledCast", () => {
+  const streamer = "stream:place-1:uuid";
+  const frozen = { stalled: true };
+
+  it("is true when the picture a watcher is shown does not advance, whatever the sound does", () => {
+    expect(stalledCast([t(streamer, "camera", frozen), t(streamer, "microphone")])).toBe(true);
+    expect(stalledCast([t(streamer, "camera"), t(streamer, "microphone", frozen)])).toBe(false);
+  });
+
+  it("with no picture, is true when no sound advances", () => {
+    expect(stalledCast([t(streamer, "microphone", frozen)])).toBe(true);
+    expect(stalledCast([t(streamer, "microphone", frozen), t("0x1", "microphone")])).toBe(false);
+  });
+
+  it("is false with nothing on air, and never reads the page's own tracks", () => {
+    expect(stalledCast([])).toBe(false);
+    expect(stalledCast([t(streamer, "camera", { local: true, stalled: true })])).toBe(false);
   });
 });

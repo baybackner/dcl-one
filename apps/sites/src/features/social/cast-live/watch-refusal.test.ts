@@ -21,11 +21,11 @@ describe("watchRefusal", () => {
     });
   });
 
-  it("keeps any other server message and falls back on a network failure", () => {
+  it("keeps any other server message and names a request that failed", () => {
     expect(watchRefusal(err(401, "Access denied, deny-listed wallet"))).toMatchObject({
       kind: "error",
       message: "Access denied, deny-listed wallet",
     });
-    expect(watchRefusal(new Error("offline"))).toMatchObject({ kind: "error", message: "Try again in a moment." });
+    expect(watchRefusal(new Error("offline"))).toMatchObject({ kind: "error", message: "offline" });
   });
 });

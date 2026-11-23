@@ -31,6 +31,8 @@ export type LiveBindings = {
   audioBlocked: boolean;
   enableAudio: () => void;
   participants?: number;
+  /** The room reconnects: the viewers do not receive this Cast. */
+  reconnecting: boolean;
 };
 
 type CastConsoleProps = {
@@ -260,7 +262,17 @@ function CastConsoleInner({
           onLeaveStream={() => send({ type: "LEAVE" })}
           tabMuted={tabMuted}
           onToggleTabMute={() => setTabMuted((muted) => !muted)}
+          reconnecting={live?.reconnecting}
           toasts={[
+            ...(live?.reconnecting
+              ? [
+                  {
+                    id: "net",
+                    title: "Reconnecting\u{2026}",
+                    message: "Your viewers do not receive your Cast until the connection is back.",
+                  },
+                ]
+              : []),
             ...(state.context.screenShareFailed
               ? [
                   {
@@ -311,11 +323,20 @@ function CastConsoleInner({
               ? "The connection to the scene was lost. Open the stream link again to rejoin."
               : "Thanks for casting. Start a new cast from the Admin Smart Item in your scene."
           }
-          // Opening the stream link again is a reload of this page.
-          onRetry={
-            live && state.context.connectionLost ? () => window.location.reload() : undefined
-          }
+          onRetry={() => send({ type: "RETRY" })}
           retryLabel="Rejoin"
+          toasts={[]}
+        />
+      )}
+
+      {value === "unreachable" && (
+        <StCastStreamer
+          state="error"
+          streamName={placeName}
+          errorTitle="Could not open this stream link"
+          errorMessage={state.context.invalidReason}
+          onRetry={() => send({ type: "RETRY" })}
+          retryLabel="Retry"
           toasts={[]}
         />
       )}

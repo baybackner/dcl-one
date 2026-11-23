@@ -12,9 +12,11 @@ import {
 import type { TrackContext } from "@/core/lib/telemetry/track";
 
 import { openSignIn } from "../../components/auth/signin-store";
+import { JOIN_TIMEOUT_MS, NO_ANSWER } from "../cast-stream/machine";
 import CastWatch, { type WatchJoin, type WatchLive, type WatchRefusal } from "../cast-watch/CastWatch";
 import { WatcherStage, useCastTracks } from "./CastStage";
 import { joinCast, type CastSession } from "./session";
+import { stalledCast } from "./stage";
 
 /** How the gatekeeper's refusals of `POST /cast/watcher-token` read on the page. */
 export function watchRefusal(err: unknown): WatchRefusal {
@@ -40,15 +42,9 @@ export function watchRefusal(err: unknown): WatchRefusal {
   return {
     kind: "error",
     title: "Could not join the cast",
-    message: server ?? "Try again in a moment.",
+    message: err instanceof Error ? err.message : "Try again in a moment.",
   };
 }
-
-export const LOST_REFUSAL: WatchRefusal = {
-  kind: "waiting",
-  title: "This Cast has ended",
-  message: "The connection to the scene closed. Join again when the Cast is back.",
-};
 
 export type WatchDeps = {
   getToken: typeof getWatcherToken;
@@ -56,6 +52,16 @@ export type WatchDeps = {
 };
 
 const LIVE_DEPS: WatchDeps = { getToken: getWatcherToken, join: (c, o) => joinCast(c, o) };
+
+/** `run`'s answer, or a rejection with `NO_ANSWER` when it has none in `ms`: its signal aborts
+ * then, as it does with `signal`. */
+export function answeredIn<T>(ms: number, signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const timeout = AbortSignal.timeout(ms);
+  const late = new Promise<never>((_, reject) =>
+    timeout.addEventListener("abort", () => reject(new Error(NO_ANSWER))),
+  );
+  return Promise.race([run(AbortSignal.any([signal, timeout])), late]);
+}
 
 /** One watcher join: the signed token, then the room. A join the page abandoned (`signal`)
  * disconnects whatever it connected and answers null. */
@@ -131,7 +137,9 @@ export default function LiveCastWatch({
     aborter.current?.abort();
     const controller = new AbortController();
     aborter.current = controller;
-    const joined = await joinAsWatcher(identity, { location, parcel }, controller.signal);
+    const joined = await answeredIn(JOIN_TIMEOUT_MS, controller.signal, (signal) =>
+      joinAsWatcher(identity, { location, parcel }, signal),
+    );
     // Abandoned: the page left or a newer join started. Never settles, so nothing renders.
     if (joined === null) return new Promise<WatchJoin>(() => {});
     if ("refused" in joined) return { refused: joined.refused };
@@ -150,14 +158,14 @@ export default function LiveCastWatch({
   }, []);
 
   const bindLost = useCallback(
-    (onLost: (why: WatchRefusal) => void) => {
+    (onLost: () => void) => {
       if (!session) return () => {};
       return session.subscribe(() => {
         // Our own leave clears the ref first; anything else is a lost room.
         if (session.disconnected() && sessionRef.current === session) {
           sessionRef.current = null;
           setSession(null);
-          onLost(LOST_REFUSAL);
+          onLost();
         }
       });
     },
@@ -165,6 +173,10 @@ export default function LiveCastWatch({
   );
 
   const audioBlocked = session ? !session.canPlaybackAudio() : false;
+  // A whole reconnection empties the room, so it is asked before what is on air.
+  const onAir = session?.onAir();
+  const away = session?.reconnecting() === "all" || (onAir && stalledCast(tracks));
+  const signal = away ? "reconnecting" : onAir ? "live" : "none";
   const live = useMemo<WatchLive>(
     () => ({
       join,
@@ -172,10 +184,11 @@ export default function LiveCastWatch({
       bindLost,
       stage: (muted) => <WatcherStage tracks={tracks} muted={muted} />,
       participantCount: session ? session.participantCount() : 0,
+      signal,
       audioBlocked,
       enableAudio: () => void session?.startAudio(),
     }),
-    [join, leave, bindLost, tracks, session, audioBlocked],
+    [join, leave, bindLost, tracks, session, audioBlocked, signal],
   );
 
   const watch: WatchResult = {

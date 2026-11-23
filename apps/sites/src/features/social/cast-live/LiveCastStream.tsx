@@ -128,6 +128,7 @@ export default function LiveCastStream({
   const micOn = tracks.some((t) => t.local && t.source === "microphone" && !t.muted);
   const camOn = tracks.some((t) => t.local && t.source === "camera" && !t.muted);
   const audioBlocked = session ? !session.canPlaybackAudio() : false;
+  const reconnecting = session ? session.reconnecting() !== null : false;
 
   const live = useMemo<LiveBindings>(
     () => ({
@@ -144,6 +145,7 @@ export default function LiveCastStream({
       devicesBusy: toggling,
       audioBlocked,
       enableAudio: () => void session?.startAudio(),
+      reconnecting,
     }),
     [
       goLive,
@@ -157,6 +159,7 @@ export default function LiveCastStream({
       toggling,
       toggle,
       audioBlocked,
+      reconnecting,
     ],
   );
 

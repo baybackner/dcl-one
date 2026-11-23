@@ -1,5 +1,6 @@
 import { delay, makeStepSlugs } from "@/core/lib/stories/index";
 import { toErrorMessage } from "@/core/lib/errors";
+import { CatalystError } from "@/data/lib/catalyst/client";
 import { and, assign, fromPromise, setup } from "xstate";
 
 import { track as defaultTrack, type TrackContext, type TrackFn } from "@/core/lib/telemetry/track";
@@ -125,6 +126,11 @@ export const CAST_EVENTS = {
   ended: "cast_ended",
 } as const;
 
+/** A join (token, module, room) that has not answered by then is stopped. */
+export const JOIN_TIMEOUT_MS = 45_000;
+/** What the page says of a request nobody answered in its bound. */
+export const NO_ANSWER = "The Cast server did not answer in time";
+
 export const STATE_TO_SLUG = {
   tokenCheck: "token-check",
   deviceSelect: "device-select",
@@ -135,6 +141,7 @@ export const STATE_TO_SLUG = {
   ending: "ending",
   ended: "ended",
   invalid: "invalid",
+  unreachable: "unreachable",
 } as const;
 
 type CastStateId = keyof typeof STATE_TO_SLUG;
@@ -153,7 +160,7 @@ export const slugToState: (slug: string | null | undefined) => CastStateId = ste
 export const DEFAULT_DEVICES: DeviceSelection = {
   mic: "Default - Microphone",
   speaker: "Default - Speakers",
-  camera: "FaceTime HD Camera",
+  camera: "Default - Camera",
 };
 
 const SIM_STREAM_INFO: StreamInfo = {
@@ -389,7 +396,13 @@ export const castMachine = setup({
     trackEnded: ({ context }) =>
       context.track(CAST_EVENTS.ended, { stub: isStub(context) }, context.trackCtx),
   },
+  delays: { tokenTimeout: 15_000, joinTimeout: JOIN_TIMEOUT_MS },
   guards: {
+    // The request failed (network, 5xx): the server did not refuse the key.
+    unanswered: ({ event }) => {
+      const e = (event as { error?: unknown }).error;
+      return e instanceof CatalystError && (e.status === 0 || e.status >= 500);
+    },
     granted: ({ event }) =>
       "output" in event && (event.output as { granted: boolean }).granted === true,
     joinOnGrant: ({ context }) => context.joinOnGrant,
@@ -432,9 +445,15 @@ export const castMachine = setup({
           target: "deviceSelect",
           actions: ["setTokenResult", "trackTokenValid"],
         },
-        onError: {
-          target: "invalid",
-          actions: ["setInvalidReason", "trackInvalidToken"],
+        onError: [
+          { guard: "unanswered", target: "unreachable", actions: ["setInvalidReason", "trackInvalidToken"] },
+          { target: "invalid", actions: ["setInvalidReason", "trackInvalidToken"] },
+        ],
+      },
+      after: {
+        tokenTimeout: {
+          target: "unreachable",
+          actions: [assign({ invalidReason: NO_ANSWER }), "trackInvalidToken"],
         },
       },
     },
@@ -507,6 +526,9 @@ export const castMachine = setup({
         onDone: { target: "live", actions: "setLiveCredentials" },
         onError: { target: "preview", actions: ["setJoinError", "trackJoinFailed"] },
       },
+      after: {
+        joinTimeout: { target: "preview", actions: [assign({ joinError: NO_ANSWER }), "trackJoinFailed"] },
+      },
     },
 
     live: {
@@ -566,7 +588,13 @@ export const castMachine = setup({
 
     ended: {
       entry: "trackEnded",
-      type: "final",
+      // Rejoin: the same link, checked again, then its lobby.
+      on: {
+        RETRY: {
+          target: "tokenCheck",
+          actions: assign({ connectionLost: false, screenSharing: false, screenShareFailed: false }),
+        },
+      },
     },
 
     invalid: {
@@ -574,6 +602,9 @@ export const castMachine = setup({
         RETRY: { target: "tokenCheck" },
       },
     },
+
+    // The link check failed or got no answer: nothing says the key is bad.
+    unreachable: { on: { RETRY: { target: "tokenCheck" } } },
   },
 });
 

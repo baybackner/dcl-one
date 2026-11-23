@@ -9,6 +9,8 @@ export type StageCandidate = {
   source: CastSource;
   muted: boolean;
   local: boolean;
+  /** Its media stopped arriving (`STALL_MS` in `session.ts`). */
+  stalled: boolean;
 };
 
 /** The identities the gatekeeper mints for Cast publishers (`stream:<place>:<uuid>`,
@@ -17,17 +19,24 @@ export function isCastPublisher(identity: string): boolean {
   return identity.startsWith("stream:") || identity.startsWith("presentation-bot:");
 }
 
+/** Who the people badge counts: a watcher (`watch:…`), a wallet in the scene and a streamer
+ * (`stream:…`) that publishes. Never the machines the gatekeeper lets in: the presentation bot,
+ * the RTMP ingress (`<uuid>-streamer`) and a stream key's connection that publishes nothing. */
+export function isPerson(identity: string, publishes: boolean): boolean {
+  if (identity.startsWith("presentation-bot:") || identity.endsWith("-streamer")) return false;
+  return publishes || !identity.startsWith("stream:");
+}
+
 function rank(c: StageCandidate): number {
   const screen = c.source === "screen_share";
   const cast = isCastPublisher(c.identity);
-  if (screen && cast) return 0;
-  if (screen) return 1;
-  if (cast) return 2;
-  return 3;
+  // A stalled track ranks after every track that advances.
+  return (c.stalled ? 4 : 0) + (screen && cast ? 0 : screen ? 1 : cast ? 2 : 3);
 }
 
-/** The video a watcher sees: a screen share before a camera, a Cast publisher before anyone
- * else in the scene room, and never a muted or non-video track. Ties keep the input order. */
+/** The video a watcher sees: a track that advances before a stalled one (a slide whose bot died
+ * gives way to the camera), a screen share before a camera, a Cast publisher before anyone else
+ * in the scene room, and never a muted or non-video track. Ties keep the input order. */
 export function pickWatcherStage<T extends StageCandidate>(tracks: readonly T[]): T | null {
   let best: T | null = null;
   for (const t of tracks) {
@@ -44,4 +53,12 @@ export function streamerStage<T extends StageCandidate>(tracks: readonly T[]): T
     ...own.filter((t) => t.source === "screen_share"),
     ...own.filter((t) => t.source === "camera"),
   ];
+}
+
+/** A Cast on air does not arrive: the picture a watcher is shown stands still or, with no
+ * picture, every sound does. */
+export function stalledCast(tracks: readonly StageCandidate[]): boolean {
+  const theirs = tracks.filter((t) => !t.local && !t.muted);
+  const shown = pickWatcherStage(theirs);
+  return shown ? shown.stalled : theirs.length > 0 && theirs.every((t) => t.stalled);
 }

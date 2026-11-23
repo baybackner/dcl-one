@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import StCastWatcher from "@dcl/one-ui/apps/sites/cast/StCastWatcher";
 
 import { track, type TrackContext } from "@/core/lib/telemetry/track";
-import type { WatchResult } from "@/data/lib/catalyst/landings/cast-watcher";
+import { fallbackPlaceName, type WatchResult } from "@/data/lib/catalyst/landings/cast-watcher";
 import SitesLayout from "../../components/chrome/SitesLayout";
 
 const JOIN_CLASS = "stcastwatcher__join";
@@ -19,8 +19,9 @@ type WatcherState = "onboarding" | "joining" | "live" | "waiting";
 /** Why a real join did not go live: the watcher page shows it in place of the stream. */
 export type WatchRefusal = { kind: "waiting" | "error"; title: string; message: string };
 
-/** A join's outcome: connected to `roomId`, or refused. */
-export type WatchJoin = { roomId: string; refused?: undefined } | { refused: WatchRefusal; roomId?: undefined };
+/** A join's outcome: connected to `roomId`, refused, or null while the sign-in dialog has the
+ * visitor: the lobby stays, with no notice. */
+export type WatchJoin = { roomId: string; refused?: undefined } | { refused: WatchRefusal; roomId?: undefined } | null;
 
 /** A real LiveKit session behind the watcher page; the story page leaves it out. */
 export type WatchLive = {
@@ -28,8 +29,11 @@ export type WatchLive = {
   leave: () => void;
   stage: (muted: boolean) => ReactNode;
   participantCount: number;
+  /** `live`: the Cast arrives. `reconnecting`: it is on air and does not arrive, or the room
+   * reconnects. `none`: nothing is on air, and the joined room reads as waiting. */
+  signal: "live" | "reconnecting" | "none";
   /** Calls `onLost` when the room goes away while watching; answers the unsubscribe. */
-  bindLost: (onLost: (why: WatchRefusal) => void) => () => void;
+  bindLost: (onLost: () => void) => () => void;
   /** The browser blocks playback until a click (Safari). */
   audioBlocked: boolean;
   enableAudio: () => void;
@@ -78,6 +82,7 @@ export default function CastWatch({
     }
     live.join().then(
       (joined) => {
+        if (!joined) return setState("onboarding");
         if (joined.refused) {
           const refused = joined.refused;
           onTrack("cast_watch_refused", { kind: refused.kind, reason: refused.title }, trackCtx);
@@ -93,9 +98,9 @@ export default function CastWatch({
         setState("live");
       },
       (err: unknown) => {
-        const reason = err instanceof Error ? err.message : "join failed";
+        const reason = err instanceof Error ? err.message : "Try again in a moment.";
         onTrack("cast_watch_refused", { kind: "error", reason }, trackCtx);
-        setRefusal({ kind: "error", title: "Could not join the cast", message: "Try again in a moment." });
+        setRefusal({ kind: "error", title: "Could not join the cast", message: reason });
         setState("onboarding");
       },
     );
@@ -104,13 +109,12 @@ export default function CastWatch({
   const bindLost = live?.bindLost;
   useEffect(
     () =>
-      bindLost?.((why) => {
-        onTrack("cast_watch_lost", { reason: why.title }, trackCtx);
-        setSidebarOpen(false);
-        setRefusal(why);
-        setState("waiting");
+      // A lost room is joined again: the join's own outcomes say what the Cast is now.
+      bindLost?.(() => {
+        onTrack("cast_watch_lost", { reason: "room closed" }, trackCtx);
+        join();
       }),
-    [bindLost, onTrack, trackCtx],
+    [bindLost, onTrack, trackCtx, join],
   );
 
   const leave = useCallback(() => {
@@ -181,23 +185,30 @@ export default function CastWatch({
     watcherTitle?: ReactNode;
     watcherMessage?: ReactNode;
     toasts?: Array<{ title: ReactNode; message: ReactNode; action?: { label?: string; onClick?: () => void } }>;
+    reconnecting?: boolean;
   }>;
 
+  // LIVE only while the Cast arrives: a joined room with nothing on air waits like a link with no stream.
+  const signal = state === "live" && live ? live.signal : "live";
+  const shown = signal === "none" ? "waiting" : state;
+  const reconnecting = signal === "reconnecting";
   const chatFooter = `Jump into ${placeName} in Decentraland to participate in the chat.`;
 
   return (
     <div
       className="cast-watch"
-      data-state={state}
+      data-state={reconnecting ? signal : shown}
       data-status={watch.status}
       data-location={watch.location}
       onClickCapture={onClickCapture}
     >
       <SitesLayout active="legal">
         <Watcher
-          streamName={placeName}
-          state={state}
-          sidebarOpen={state === "live" && sidebarOpen}
+          // The lobby names the place as the link does, before the join and after LEAVE.
+          streamName={fallbackPlaceName(watch.location)}
+          state={shown}
+          reconnecting={reconnecting}
+          sidebarOpen={shown === "live" && sidebarOpen}
           isTabMuted={isTabMuted}
           chatFooter={chatFooter}
           participantCount={live ? live.participantCount : participantCount}
@@ -207,6 +218,9 @@ export default function CastWatch({
           watcherTitle={refusal?.kind === "waiting" ? refusal.title : undefined}
           watcherMessage={refusal?.kind === "waiting" ? refusal.message : undefined}
           toasts={[
+            ...(reconnecting
+              ? [{ title: "Reconnecting\u{2026}", message: "The Cast does not arrive. It returns when the connection is back." }]
+              : []),
             ...(refusal?.kind === "error"
               ? [{ title: refusal.title, message: refusal.message, action: { label: "Retry", onClick: join } }]
               : []),
