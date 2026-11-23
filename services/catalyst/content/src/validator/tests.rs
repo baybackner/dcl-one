@@ -522,6 +522,95 @@ async fn a_contract_wallet_is_asked_at_the_entity_block_after_latest_refuses() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A contract wallet that answers every ask with `latest` and refuses at past blocks.
+struct AcceptsAtLatest(bool);
+
+#[async_trait]
+impl Eip1654Validator for AcceptsAtLatest {
+    async fn validate_signature(&self, _: &str, _: &[u8], _: &[u8]) -> Result<bool, AuthError> {
+        Ok(self.0)
+    }
+
+    async fn validate_signature_at_block(
+        &self,
+        _: &str,
+        _: &[u8],
+        _: &[u8],
+        _: u64,
+    ) -> Result<bool, AuthError> {
+        Ok(false)
+    }
+}
+
+/// A local deploy's contract-wallet link accepted at latest reads no L1 block.
+#[tokio::test]
+async fn a_contract_wallet_accepted_at_latest_reads_no_block() {
+    let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
+    let (storage, tmp) = temp_storage("eip1654-latest").await;
+    let s = Sources::new(
+        lazy_pool(),
+        storage,
+        Outbound::for_tests(),
+        Some(Arc::new(AcceptsAtLatest(true))),
+        Settings {
+            l1_rpc_url: Some(chain.url.clone()),
+            ..mainnet()
+        },
+    );
+    let id = "bafkreientity";
+    let auth =
+        crate::sync_test_support::signed_chain_behind_contract(id, "2099-01-01T00:00:00.000Z")
+            .await;
+
+    ExternalCalls::validate_signature(&s, id, &auth, ENTITY_MS)
+        .await
+        .unwrap();
+    assert!(chain.calls().is_empty(), "{:?}", chain.calls());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A local deploy whose L1 block lookup fails after a refusal at latest is undecided, never
+/// refused.
+#[tokio::test]
+async fn a_failed_l1_block_lookup_leaves_a_contract_wallet_unverifiable() {
+    let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
+    chain.fail_block_reads(usize::MAX);
+    let (storage, tmp) = temp_storage("eip1654-no-block").await;
+    let s = Sources::new(
+        lazy_pool(),
+        storage,
+        Outbound::for_tests(),
+        Some(Arc::new(AcceptsAtLatest(false))),
+        Settings {
+            l1_rpc_url: Some(chain.url.clone()),
+            ignore_blockchain_access: true,
+            ..mainnet()
+        },
+    );
+    let model = b"glb".to_vec();
+    let (entity, files, _, _) = signed(scene(&["1,1"], &model), std::slice::from_ref(&model)).await;
+    let auth = crate::sync_test_support::signed_chain_behind_contract(
+        &entity.id,
+        "2099-01-01T00:00:00.000Z",
+    )
+    .await;
+    let ctx = Context {
+        sources: &s,
+        auth_chain: &auth,
+    };
+    let verdict = validate(&entity, &files, &ctx).await.unwrap_err();
+    assert!(
+        matches!(&verdict[..], [ValidationError::Unverifiable(m)] if m.starts_with("The signature is invalid. EIP-1654")),
+        "{verdict:?}"
+    );
+    assert!(
+        chain.calls().iter().any(|c| c == "eth_getBlockByNumber"),
+        "the block was looked up: {:?}",
+        chain.calls()
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[cfg(unix)]
 fn seal_shard(storage: &Storage, hash: &str) -> std::path::PathBuf {
     let shard = storage.root().join(crate::storage::hex_prefix(hash));

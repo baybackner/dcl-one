@@ -1847,3 +1847,65 @@ async fn a_plain_deploy_crossing_the_ttl_during_validation_skips_the_current_che
     assert!(published.is_ok(), "got {published:?}");
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A contract wallet that refuses at latest and records the past block it is asked at.
+#[derive(Default)]
+struct SignedInThePast(std::sync::Mutex<Vec<u64>>);
+
+#[async_trait]
+impl Eip1654Validator for SignedInThePast {
+    async fn validate_signature(&self, _: &str, _: &[u8], _: &[u8]) -> Result<bool, AuthError> {
+        Ok(false)
+    }
+
+    async fn validate_signature_at_block(
+        &self,
+        _: &str,
+        _: &[u8],
+        _: &[u8],
+        block: u64,
+    ) -> Result<bool, AuthError> {
+        self.0.lock().unwrap().push(block);
+        Ok(true)
+    }
+}
+
+/// A partial upload's signature check on a fully validating deployer asks a contract wallet
+/// refused at latest again at the L1 block strictly before the entity timestamp.
+#[tokio::test]
+async fn the_signature_check_asks_a_contract_wallet_at_the_entity_time_block() {
+    use crate::validator::fake_chain::{self, GENESIS, INTERVAL};
+    let chain = fake_chain::serve(|q, _| panic!("unexpected question {q:?}")).await;
+    let (storage, tmp) = crate::sync_test_support::temp_storage("deployer-eip1654").await;
+    let wallet = Arc::new(SignedInThePast::default());
+    let sources = crate::validator::Sources::new(
+        lazy_pool(),
+        storage.clone(),
+        crate::http::Outbound::for_tests(),
+        Some(wallet.clone()),
+        crate::validator::Settings {
+            eth_network: "mainnet".into(),
+            l1_rpc_url: Some(chain.url.clone()),
+            ..Default::default()
+        },
+    );
+    let deployer = WriteDeployer::new(
+        lazy_pool(),
+        storage,
+        Some(wallet.clone()),
+        Arc::new(sources),
+    );
+    let id = "bafkreientity";
+    let auth =
+        crate::sync_test_support::signed_chain_behind_contract(id, "2099-01-01T00:00:00.000Z")
+            .await;
+    // A block is mined at this exact second: the one before it is asked.
+    let entity_s = GENESIS + 2_000 * INTERVAL;
+
+    deployer
+        .check_signature(id, &auth, entity_s * 1000)
+        .await
+        .unwrap();
+    assert_eq!(*wallet.0.lock().unwrap(), [1_999]);
+    let _ = std::fs::remove_dir_all(tmp);
+}
