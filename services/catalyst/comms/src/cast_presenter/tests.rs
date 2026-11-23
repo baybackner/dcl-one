@@ -1149,14 +1149,45 @@ async fn a_bot_that_disconnects_ends_its_session() {
     assert_eq!(presenter.active_sessions(), 0);
 }
 
-/// The room service of the LiveKit at `.1.connect_url`, as the gatekeeper
-/// calls it.
-struct TestRooms(reqwest::Client, LiveKitTarget);
+/// The room service of the LiveKit at `livekit.connect_url`, as the
+/// gatekeeper calls it, and a gatekeeper for which every bot holds its room's
+/// active Cast credential but those in `revoked`.
+struct TestRooms {
+    http: reqwest::Client,
+    livekit: LiveKitTarget,
+    revoked: Mutex<Vec<String>>,
+}
 
+impl TestRooms {
+    fn new(livekit: LiveKitTarget) -> Arc<Self> {
+        Arc::new(Self {
+            http: reqwest::Client::new(),
+            livekit,
+            revoked: Mutex::default(),
+        })
+    }
+    /// No LiveKit answers: an eviction fails at once.
+    fn offline() -> Arc<Self> {
+        Self::new(LiveKitTarget {
+            connect_url: "ws://127.0.0.1:9".into(),
+            ..target()
+        })
+    }
+    /// The bot of `room_token(room, tail)` no longer holds the credential.
+    fn revoke(&self, room: &str, tail: &str) {
+        let identity = format!("presentation-bot:{room}:{tail}");
+        self.revoked.lock().unwrap().push(identity);
+    }
+}
+
+#[async_trait::async_trait]
 impl super::bot::Rooms for TestRooms {
     fn room_service(&self) -> RoomServiceClient<'_> {
-        let own = &self.1;
-        RoomServiceClient::new(&self.0, &own.connect_url, &own.api_key, &own.api_secret)
+        let own = &self.livekit;
+        RoomServiceClient::new(&self.http, &own.connect_url, &own.api_key, &own.api_secret)
+    }
+    async fn holds_credential(&self, _room: &str, identity: &str) -> anyhow::Result<bool> {
+        Ok(!self.revoked.lock().unwrap().iter().any(|r| r == identity))
     }
 }
 
@@ -1181,7 +1212,7 @@ async fn a_bot_that_ends_without_leaving_is_removed_from_its_room() {
         connect_url,
         ..target()
     };
-    presenter.set_room_service(Arc::new(TestRooms(reqwest::Client::new(), own)));
+    presenter.set_room_service(TestRooms::new(own));
     presenter.stop(&info.id).await;
     assert!(calls.lock().unwrap().is_empty());
 
@@ -1231,6 +1262,32 @@ async fn sessions_without_participants_stop_after_five_minutes() {
     assert_eq!(bot.sent.lock().unwrap().last(), Some(&Sent::Shutdown));
 }
 
+/// The reported quota failure: a scene admin shares a deck, then shares
+/// another without a Stop reaching the node. On a node with one slot the
+/// second share takes the first one's place instead of answering 429.
+#[tokio::test]
+async fn sharing_again_without_stop_takes_the_scenes_own_slot() {
+    let launcher = FakeLauncher::new(json!({}));
+    let presenter = Presenter::new(launcher.clone(), target(), 1, None);
+    presenter.set_room_service(TestRooms::offline());
+    let first = presenter
+        .create(test_pdf(1), &bot_token("access:1"), "a.pdf", None)
+        .await
+        .unwrap();
+    let (first_bot, _) = launcher.last();
+    let second = presenter
+        .create(test_pdf(1), &bot_token("access:2"), "b.pdf", None)
+        .await;
+    assert!(second.is_ok(), "second share refused: {second:?}");
+    settle_until(|| first_bot.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    let last = data_messages(&first_bot).last().unwrap().0.clone();
+    assert_eq!(
+        last,
+        json!({"type": "presentation:stopped", "id": first.id})
+    );
+    assert_eq!(presenter.active_sessions(), 1);
+}
+
 /// A room runs one presentation: a new bot token of the room stops the
 /// running one as it takes the slot, so a full node still takes it; another
 /// room is refused. The running token again answers 409 and stops nothing.
@@ -1239,6 +1296,7 @@ async fn sessions_without_participants_stop_after_five_minutes() {
 async fn a_new_presentation_replaces_its_rooms_running_one() {
     let launcher = FakeLauncher::new(json!({}));
     let presenter = Presenter::new(launcher.clone(), target(), 2, None);
+    presenter.set_room_service(TestRooms::offline());
     let first = presenter
         .create(test_pdf(1), &GOOD, "a.pdf", None)
         .await
@@ -1292,9 +1350,9 @@ async fn a_new_presentation_replaces_its_rooms_running_one() {
         json!({"type": "presentation:stopped", "id": first.id})
     );
     assert!(!shut(1) && !shut(2));
-    // The replaced token is free again.
-    assert!(presenter.reserve(&GOOD).is_ok());
 
+    // The second presentation runs when a new one that LiveKit refuses comes.
+    assert_eq!(presenter.active_sessions(), 2);
     let failed = presenter
         .create(test_pdf(1), &bot_token("access:refused"), "c.pdf", None)
         .await;
@@ -1306,6 +1364,130 @@ async fn a_new_presentation_replaces_its_rooms_running_one() {
     );
     assert_eq!(presenter.active_sessions(), 1);
     assert!(!shut(1));
+    // The replaced token is free again.
+    assert!(presenter.reserve(&GOOD).await.is_ok());
+}
+
+/// A replaced bot holds its slot until it has shut down: repeated shares of
+/// one room on a full node never run more bots than there are slots.
+#[tokio::test]
+async fn a_replaced_bot_holds_its_slot_until_it_shut_down() {
+    let launcher = FakeLauncher::new(json!({}));
+    let presenter = Presenter::new(launcher.clone(), target(), 1, None);
+    presenter.set_room_service(TestRooms::offline());
+    presenter
+        .create(test_pdf(1), &GOOD, "a.pdf", None)
+        .await
+        .unwrap();
+    let (first, _) = launcher.last();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *first.shutdown_gate.lock().unwrap() = Some(gate.clone());
+    let second = presenter
+        .create(test_pdf(1), &bot_token("access:2"), "b.pdf", None)
+        .await
+        .unwrap();
+    let announced = data_messages(&first).last().unwrap().0.clone();
+    assert_eq!(announced["type"], "presentation:stopped");
+    let full = "Maximum concurrent presentations reached (1)";
+    for tail in ["access:3", "access:4"] {
+        let token = bot_token(tail);
+        let again = presenter.create(test_pdf(1), &token, "c.pdf", None).await;
+        assert_eq!(again.unwrap_err().to_string(), full);
+    }
+    assert_eq!(launcher.bots.lock().unwrap().len(), 2);
+    gate.notify_one();
+    settle_until(|| first.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    presenter
+        .create(test_pdf(1), &bot_token("access:3"), "c.pdf", None)
+        .await
+        .unwrap();
+    let (replaced, _) = launcher.bots.lock().unwrap()[1].clone();
+    settle_until(|| replaced.sent.lock().unwrap().contains(&Sent::Shutdown)).await;
+    let last = data_messages(&replaced).last().unwrap().0.clone();
+    assert_eq!(
+        last,
+        json!({"type": "presentation:stopped", "id": second.id})
+    );
+    assert_eq!(presenter.active_sessions(), 1);
+}
+
+/// A bot token of a revoked or rotated Cast credential, still signed and
+/// unexpired, replaces nothing: on a full node it is refused before a bot
+/// starts, otherwise its bot is shut down when it would join the room's
+/// presentation (401). A creation whose credential is revoked while it runs
+/// does not replace the presentation admitted meanwhile.
+#[tokio::test]
+async fn a_revoked_credential_replaces_nothing() {
+    let launcher = FakeLauncher::slow(json!({}), Duration::from_millis(50));
+    let rooms = TestRooms::offline();
+    rooms.revoke("scene:room", "access:old");
+    let presenter = Presenter::new(launcher.clone(), target(), 1, None);
+    presenter.set_room_service(rooms.clone());
+    presenter
+        .create(test_pdf(1), &GOOD, "a.pdf", None)
+        .await
+        .unwrap();
+    let old = bot_token("access:old");
+    let refused = presenter.create(test_pdf(1), &old, "x.pdf", None).await;
+    let full = "Maximum concurrent presentations reached (1)";
+    assert_eq!(refused.unwrap_err().to_string(), full);
+    let json_form = json!({"url": "https://example.org/x.pdf", "livekitToken": old,
+                           "livekitUrl": OWN_LIVEKIT});
+    let (status, _) = post(
+        super::router(Some(presenter.clone())),
+        "application/json",
+        json_form.to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    let (bot, _) = launcher.last();
+    settle().await;
+    assert!(!bot.sent.lock().unwrap().contains(&Sent::Shutdown));
+    assert_eq!(launcher.bots.lock().unwrap().len(), 1);
+
+    let roomy = Presenter::new(launcher.clone(), target(), 3, None);
+    roomy.set_room_service(rooms.clone());
+    roomy
+        .create(test_pdf(1), &GOOD, "a.pdf", None)
+        .await
+        .unwrap();
+    let (kept, _) = launcher.last();
+    let beside = roomy.create(test_pdf(1), &old, "x.pdf", None).await;
+    assert!(matches!(
+        beside,
+        Err(super::session::CreateError::InvalidCredentials(_))
+    ));
+    settle().await;
+    assert!(!kept.sent.lock().unwrap().contains(&Sent::Shutdown));
+    assert!(
+        launcher
+            .last()
+            .0
+            .sent
+            .lock()
+            .unwrap()
+            .contains(&Sent::Shutdown)
+    );
+    assert_eq!(roomy.active_sessions(), 1);
+
+    // Revoked in flight: both start in an empty room, the revoked one
+    // replaces nothing when it is admitted.
+    let empty = room_token("empty", "access:new");
+    let stale = room_token("empty", "access:stale");
+    rooms.revoke("empty", "access:stale");
+    let (fresh, revoked) = tokio::join!(
+        roomy.create(test_pdf(1), &empty, "n.pdf", None),
+        roomy.create(test_pdf(1), &stale, "s.pdf", None),
+    );
+    let fresh = fresh.unwrap().id;
+    settle().await;
+    let bots = launcher.bots.lock().unwrap().clone();
+    let live: Vec<_> = bots[bots.len() - 2..]
+        .iter()
+        .filter(|(bot, _)| !bot.sent.lock().unwrap().contains(&Sent::Shutdown))
+        .map(|(bot, _)| states(bot).last().unwrap()["presentationId"].clone())
+        .collect();
+    assert_eq!(live, [json!(fresh)], "revoked: {revoked:?}");
 }
 
 /// Two creations of one room at once both run; the one admitted last stops
@@ -1314,6 +1496,7 @@ async fn a_new_presentation_replaces_its_rooms_running_one() {
 async fn creations_of_one_room_at_once_leave_one_presentation() {
     let launcher = FakeLauncher::slow(json!({}), Duration::from_millis(50));
     let presenter = Presenter::new(launcher.clone(), target(), 3, None);
+    presenter.set_room_service(TestRooms::offline());
     let tokens = [bot_token("access:1"), bot_token("access:2")];
     let (a, b) = tokio::join!(
         presenter.create(test_pdf(1), &tokens[0], "a.pdf", None),
@@ -1352,13 +1535,13 @@ async fn a_token_stays_taken_until_its_stopped_bot_shut_down() {
     });
     settle_until(|| presenter.active_sessions() == 0).await;
     assert!(matches!(
-        presenter.reserve(&GOOD),
+        presenter.reserve(&GOOD).await,
         Err(super::session::CreateError::TokenInUse)
     ));
     gate.notify_one();
     stopping.await.unwrap();
     assert!(bot.sent.lock().unwrap().contains(&Sent::Shutdown));
-    assert!(presenter.reserve(&GOOD).is_ok());
+    assert!(presenter.reserve(&GOOD).await.is_ok());
 }
 
 #[tokio::test]
@@ -1767,9 +1950,9 @@ async fn a_dropped_request_still_finishes_its_presentation() {
 async fn the_json_path_holds_one_slot_from_the_check_to_the_session() {
     let launcher = FakeLauncher::new(json!({}));
     let presenter = Presenter::new(launcher.clone(), target(), 1, None);
-    let slot = presenter.reserve(&GOOD).unwrap();
+    let slot = presenter.reserve(&GOOD).await.unwrap();
     assert!(matches!(
-        presenter.reserve(&GOOD),
+        presenter.reserve(&GOOD).await,
         Err(super::session::CreateError::MaxConcurrent(1))
     ));
     assert!(matches!(
@@ -1795,7 +1978,7 @@ async fn the_json_path_holds_one_slot_from_the_check_to_the_session() {
         .await
         .unwrap();
     assert_eq!(presenter.active_sessions(), 1);
-    assert!(presenter.reserve(&GOOD).is_err());
+    assert!(presenter.reserve(&GOOD).await.is_err());
 }
 
 #[test]
@@ -2221,7 +2404,7 @@ async fn a_presentation_goes_live_on_a_real_livekit() {
         )
     );
     let token = signed_token(key, secret, "presentation-bot:room:access:1", "room");
-    let slot = presenter.reserve(&token).unwrap();
+    let slot = presenter.reserve(&token).await.unwrap();
     presenter.validate_credentials(&slot, &token).await.unwrap();
     let info = presenter
         .create_reserved(slot, test_pdf(2), &token, "Live.pdf", None)
@@ -2238,7 +2421,7 @@ async fn a_presentation_goes_live_on_a_real_livekit() {
     // room at once (LiveKit alone keeps it, and its last slide, for about
     // 20 s), and a presentation of another room goes on.
     let own = presenter.livekit().clone();
-    let rooms = Arc::new(TestRooms(reqwest::Client::new(), own));
+    let rooms = TestRooms::new(own);
     presenter.set_room_service(rooms.clone());
     let kept_bot = "presentation-bot:other:access:2";
     let kept = presenter

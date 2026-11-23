@@ -23,14 +23,17 @@
 //!   it joins, allowed to publish a screen share): any other answers 401
 //!   before a slot is taken or a bot started ([`session`]). Multipart uploads
 //!   are read under a permit, as many at once as there are slots (429).
-//! - A room runs one presentation: a new one, with a bot token of its own,
-//!   stops the room's running one when its slot is taken, so a scene holds
-//!   at most one slot and a forgotten presentation never blocks a new share
-//!   of its scene (upstream runs both, and clients then show different
-//!   ones). A token whose bot is running answers 409 and stops nothing
-//!   (upstream starts it, and LiveKit drops the first bot). An upload to a
-//!   full node is answered 429 before it is read, its room unknown then; the
-//!   JSON `url` form replaces the room's presentation on a full node too.
+//! - A room runs one presentation: a new one, with a bot token of the room's
+//!   active Cast credential, stops the room's running one when its slot is
+//!   taken, so a forgotten presentation never blocks a new share of its scene
+//!   (upstream runs both, and clients then show different ones). The
+//!   replaced bot keeps its slot until it has shut down, and the new bot
+//!   publishes only after the replaced one announced its stop. A token of a
+//!   revoked or rotated credential replaces nothing. A token whose bot is
+//!   running answers 409 and stops nothing (upstream starts it, and LiveKit
+//!   drops the first bot). An upload to a full node is answered 429 before it
+//!   is read, its room unknown then; the JSON `url` form replaces the room's
+//!   presentation on a full node too.
 //! - A bot whose process ended without leaving is removed from its room at
 //!   once, after the node sends `presentation:stopped` in its place.
 //!   Upstream leaves it to LiveKit, which keeps it about 20 s.
