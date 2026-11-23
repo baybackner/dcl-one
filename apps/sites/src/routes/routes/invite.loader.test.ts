@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/core/lib/telemetry/track", () => ({ track: vi.fn() }));
 vi.mock("@/core/lib/telemetry/page-loader", () => ({
@@ -13,9 +13,9 @@ import { loader } from "./invite.($referrer)";
 
 const ADDRESS = "0xabcdef0123456789abcdef0123456789abcdef01";
 
-const read = (referrer?: string) =>
+const read = (referrer?: string, signal?: AbortSignal) =>
   loader({
-    request: new Request(`https://site.test/invite${referrer ? `/${referrer}` : ""}`),
+    request: new Request(`https://site.test/invite${referrer ? `/${referrer}` : ""}`, { signal }),
     context: {},
     params: { referrer },
   } as never);
@@ -57,9 +57,29 @@ describe("Invite loader", () => {
   });
 
   describe("when the lookup fails", () => {
-    it("should keep the page, with no referrer", async () => {
+    let logged: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      logged = vi.spyOn(console, "error").mockImplementation(() => {});
       loadInviteReferral.mockRejectedValue(new Error("down"));
+    });
+
+    afterEach(() => {
+      logged.mockRestore();
+    });
+
+    it("should keep the page, with no referrer, and log the failure", async () => {
       expect(await read(ADDRESS)).toMatchObject({ referrerParam: ADDRESS, referrer: null });
+      expect(logged).toHaveBeenCalledWith("[invite] referrer lookup failed: down");
+    });
+
+    describe("and the request was aborted", () => {
+      it("should not log", async () => {
+        const aborted = new AbortController();
+        aborted.abort();
+        expect(await read(ADDRESS, aborted.signal)).toMatchObject({ referrer: null });
+        expect(logged).not.toHaveBeenCalled();
+      });
     });
   });
 });

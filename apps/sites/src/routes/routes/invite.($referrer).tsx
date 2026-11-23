@@ -46,7 +46,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 
   // An invite is someone's: no referrer, or one that names no wallet, is not a page.
   if (!referrerParam) throw data(null, { status: 404, statusText: "Not Found" });
-  const load = await loadInviteReferral(referrerParam, request.signal).catch(() => null);
+  // A lookup that fails keeps the page, without a referrer; the log is what shows the node could not answer.
+  const load = await loadInviteReferral(referrerParam, request.signal).catch((err: unknown) => {
+    if (!request.signal.aborted) console.error(`[invite] referrer lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  });
   if (load && !load.referrer.address) throw data(null, { status: 404, statusText: "Not Found" });
   return wrap({
     sid,
