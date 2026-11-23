@@ -305,21 +305,52 @@ pub(crate) fn scene_on_parcel(
     }
 }
 
-/// The stage a scene's load or run is at, as `/scene_loading_state` and `/scene_state` name it.
-pub(crate) fn stage_name(
-    loading: Option<&SceneLoading>,
-    context: Option<&RendererSceneContext>,
-) -> &'static str {
-    match (loading, context) {
-        (Some(SceneLoading::SceneSpawned), _) => "Spawning",
-        (Some(SceneLoading::SceneEntity), _) => "Reading definition",
-        (Some(SceneLoading::MainCrdt { .. }), _) => "Reading main.crdt",
-        (Some(SceneLoading::Javascript { .. }), _) => "Starting JavaScript",
-        (Some(SceneLoading::Failed), _) => "Failed",
-        (None, Some(context)) if context.broken() => "Broken",
-        (None, Some(context)) if !context.blocked.is_empty() => "Blocked",
-        (None, Some(_)) => "Running",
-        (None, None) => "Waiting for the parcel scene to start.",
+/// The stage a scene's load or run is at: the one classification `/scene_loading_state`,
+/// `/scene_state` and the settling waits (`util::settle`) read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stage {
+    Spawning,
+    Definition,
+    MainCrdt,
+    Javascript,
+    Failed,
+    Broken,
+    Blocked,
+    Running,
+    Unstarted,
+}
+
+impl Stage {
+    pub(crate) fn of(
+        loading: Option<&SceneLoading>,
+        context: Option<&RendererSceneContext>,
+    ) -> Self {
+        match (loading, context) {
+            (Some(SceneLoading::SceneSpawned), _) => Self::Spawning,
+            (Some(SceneLoading::SceneEntity), _) => Self::Definition,
+            (Some(SceneLoading::MainCrdt { .. }), _) => Self::MainCrdt,
+            (Some(SceneLoading::Javascript { .. }), _) => Self::Javascript,
+            (Some(SceneLoading::Failed), _) => Self::Failed,
+            (None, Some(context)) if context.broken() => Self::Broken,
+            (None, Some(context)) if !context.blocked.is_empty() => Self::Blocked,
+            (None, Some(_)) => Self::Running,
+            (None, None) => Self::Unstarted,
+        }
+    }
+
+    /// The stage as `/scene_loading_state` and `/scene_state` name it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Spawning => "Spawning",
+            Self::Definition => "Reading definition",
+            Self::MainCrdt => "Reading main.crdt",
+            Self::Javascript => "Starting JavaScript",
+            Self::Failed => "Failed",
+            Self::Broken => "Broken",
+            Self::Blocked => "Blocked",
+            Self::Running => "Running",
+            Self::Unstarted => "Waiting for the parcel scene to start.",
+        }
     }
 }
 
@@ -591,7 +622,7 @@ fn loading_state(
     stages: Query<&SceneLoading>,
     scenes: Query<(&RendererSceneContext, Option<&GltfLoadingCount>)>,
     preloads: Query<&PreloadedAsset, With<LoadingPreloadedAsset>>,
-    waits: Option<Res<SceneWaits>>,
+    waits: Res<SceneWaits>,
 ) {
     if input.take().is_none() {
         return;
@@ -609,10 +640,11 @@ fn loading_state(
     let [spawned, definition, crdt, javascript, failed] = stages_by_kind;
     let stage = parcel_root(&containing, player.single().ok(), true)
         .map(|root| {
-            stage_name(
+            Stage::of(
                 stages.get(root).ok(),
                 scenes.get(root).ok().map(|(context, _)| context),
             )
+            .name()
         })
         .unwrap_or_else(|reason| reason);
     let (mut running, mut blocked, mut broken, mut gltf) = (0, 0, 0, 0);
@@ -641,7 +673,7 @@ fn loading_state(
     }
     input.reply_ok(json!({"current":current.0, "stage": stage, "spawned":spawned,"definition":definition,"crdt":crdt,"javascript":javascript,"failed":failed,
         "running":running,"blocked":blocked,"broken":broken,"gltf":gltf,"preloads":preloads_count,"texturePreloads":textures,
-        "settleWaits":waits.map_or(0, |waits| waits.pending())}).to_string());
+        "settleWaits":waits.pending()}).to_string());
 }
 
 #[derive(clap::Parser, ConsoleCommand)]

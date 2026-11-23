@@ -51,10 +51,11 @@ export interface WorldState {
 /** A scene's lifecycle state as `/scene_state` and the settling waits name it. */
 export type SceneLifecycle = 'loading' | 'failed' | 'starting' | 'blocked' | 'broken' | 'running' | 'none'
 
-/** What `/teleport --wait` and `/reload --wait` report: the scene settled (it runs, reached tick
- *  5 and a frame with it was presented) or the wait ended, and why in `warning`. */
+/** What `/teleport --wait` and `/reload --wait` report: the scene settled (it runs, its content is
+ *  shown and a frame with it was presented) or the wait ended, and why in `warning`. */
 export interface SettleReport {
-  sceneHash: string | null
+  /** null on a parcel with no scene; absent when a teleport's wait ended before the landing */
+  sceneHash?: string | null
   title?: string
   sceneState: SceneLifecycle
   /** scene ticks run during the wait */
@@ -586,13 +587,13 @@ const DEFAULT_HUD_TIMEOUT_MS = 10_000
 const ACTIONABLE_TIMEOUT_MS = 10_000
 
 const DEFAULT_ARRIVAL_TIMEOUT_MS = 180_000
-/** The longest a settling command waits inside the engine: under the transports' 120 s command
- *  timeout, so a slow load is reported by the engine rather than cut by the transport. */
-const MAX_SETTLE_MS = 100_000
-
-function settleSeconds(timeoutMs: number): number {
-  return Math.max(1, Math.min(timeoutMs, MAX_SETTLE_MS)) / 1000
-}
+/** A transport's command timeout when it names none (the fake). */
+const DEFAULT_COMMAND_TIMEOUT_MS = 120_000
+/** What a settling command's wait inside the engine stays under the transport's command timeout
+ *  by, so a slow load is reported by the engine rather than cut by the transport. */
+const SETTLE_MARGIN_MS = 20_000
+/** `--timeout-seconds` of `--wait` when the flag is left out. */
+const ENGINE_SETTLE_MS = 60_000
 
 /** The error as it may be rethrown: a transport's own error (a timeout, a closed driver) can
  *  quote the line, and the test runner prints the message and the stack. */
@@ -728,7 +729,7 @@ export class Explorer {
     const timeoutMs = options.timeoutMs ?? DEFAULT_ARRIVAL_TIMEOUT_MS
     const startedAt = Date.now()
     const before = (await this.worldState()).arrivals
-    const teleport = await this.json<TeleportReport>(`/teleport ${x} ${y} --wait --timeout-seconds ${settleSeconds(timeoutMs)}`)
+    const teleport = await this.json<TeleportReport>(`/teleport ${x} ${y} --wait --timeout-seconds ${this.#settleSeconds(timeoutMs)}`)
     const left = Math.max(1, timeoutMs - (Date.now() - startedAt))
     return { ...(await this.#waitArrival(before, left, `the arrival at ${x},${y}`)), teleport }
   }
@@ -736,7 +737,18 @@ export class Explorer {
   /** Reload the parcel scene under the player and wait for the new one to settle
    *  (`/reload --current --wait`); `settled` false with a `warning` when it did not in time. */
   reload(options: { timeoutMs?: number } = {}): Promise<ReloadReport> {
-    return this.json<ReloadReport>(`/reload --current --wait --timeout-seconds ${settleSeconds(options.timeoutMs ?? 60_000)}`)
+    // the engine's own default, unless the transport would cut it
+    const timeout = options.timeoutMs === undefined && this.#maxSettleMs() >= ENGINE_SETTLE_MS ? '' : ` --timeout-seconds ${this.#settleSeconds(options.timeoutMs ?? ENGINE_SETTLE_MS)}`
+    return this.json<ReloadReport>(`/reload --current --wait${timeout}`)
+  }
+
+  /** The longest a settling command waits inside the engine: under the transport's command timeout. */
+  #maxSettleMs(): number {
+    return Math.max(1000, (this.console.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS) - SETTLE_MARGIN_MS)
+  }
+
+  #settleSeconds(timeoutMs: number): number {
+    return Math.max(1, Math.min(timeoutMs, this.#maxSettleMs())) / 1000
   }
 
   /** The parcel scene under the player: its id, state and whether it is ready. */

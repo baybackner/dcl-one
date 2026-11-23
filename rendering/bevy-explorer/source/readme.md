@@ -347,8 +347,8 @@ the [conventions ADR](../../../docs/adr/2026-11-17-console-command-conventions.m
   hover entries, the scene's pointer events and a diagnosis (`docs/guidelines/running.md`). A hover
   lasts at most 1800 frames (`--frames`) and is never cut short by `--timeout-frames`.
 - Scenes: `/teleport x y [realm] --wait [--timeout-seconds S]` and `/reload --current --wait`
-  answer once the player has landed and the parcel's scene runs, has reached tick 5 and a frame with
-  it was presented (`settled`, `sceneState`, `ticksWaited`, `renderedFrames`, `settleMs`; a
+  answer once the player has landed and the parcel's scene runs, shows its content (past tick 5,
+  nothing blocking it) and a frame with it was presented (`settled`, `sceneState`, `ticksWaited`, `renderedFrames`, `settleMs`; a
   teleport adds `arrived`, `sceneReady`, `sceneHash`), or with `settled:false` and a `warning`
   naming what it waited for. `/scene_state` reads the parcel scene under the player: `sceneId`
   (its hash), `title`, `parcel`, `state`, `isReady`, `loadingStage`, `sdkVersion`.

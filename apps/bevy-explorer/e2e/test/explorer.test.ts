@@ -88,7 +88,25 @@ describe('Explorer', () => {
     const explorer = new Explorer(fake)
     assert.equal((await explorer.reload()).settled, true)
     assert.equal((await explorer.sceneState()).isReady, true)
-    assert.deepEqual(fake.lines, ['/reload --current --wait --timeout-seconds 60', '/scene_state'])
+    assert.deepEqual(fake.lines, ['/reload --current --wait', '/scene_state'])
+  })
+
+  test('a settling wait stays under the transport\'s command timeout', async () => {
+    let reads = 0
+    const fake = Object.assign(
+      new FakeConsole({
+        world_state: () => world({ arrivals: ++reads > 1 ? 2 : 1, inWorld: true }),
+        teleport: JSON.stringify(settled),
+        reload: JSON.stringify({ reloaded: true, ...settled })
+      }),
+      { commandTimeoutMs: 50_000 }
+    )
+    const explorer = new Explorer(fake)
+    await explorer.teleport(1, 2, { timeoutMs: 180_000 })
+    await explorer.reload()
+    await explorer.reload({ timeoutMs: 5000 })
+    assert.deepEqual(fake.sent('teleport'), ['/teleport 1 2 --wait --timeout-seconds 30'])
+    assert.deepEqual(fake.sent('reload'), ['/reload --current --wait --timeout-seconds 30', '/reload --current --wait --timeout-seconds 5'])
   })
 
   test('teleport times out with the last state when the player never arrives', async () => {

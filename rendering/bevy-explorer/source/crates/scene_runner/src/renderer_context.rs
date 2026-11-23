@@ -175,6 +175,10 @@ pub const SUPER_USER_SCENE_NOT_RESPONDING_TIMEOUT: std::time::Duration =
 pub const SCENE_NOT_RESPONDING_DISPLAY_AFTER: std::time::Duration =
     std::time::Duration::from_secs(2);
 
+/// The ticks a scene runs before its content counts as shown: it is shown, and the teleport
+/// releases the player onto it, once it has run past this many.
+pub const STARTUP_TICKS: u32 = 5;
+
 impl RendererSceneContext {
     pub fn broken(&self) -> bool {
         matches!(self.state, SceneState::Broken)
@@ -186,7 +190,7 @@ impl RendererSceneContext {
     pub fn content_shown(&self) -> bool {
         self.broken()
             || self.blocked.contains(FROZEN_BLOCK)
-            || (self.tick_number > 5 && self.blocked.is_empty())
+            || (self.tick_number > STARTUP_TICKS && self.blocked.is_empty())
     }
 
     pub fn sender(&self) -> Option<&tokio::sync::mpsc::UnboundedSender<RendererResponse>> {

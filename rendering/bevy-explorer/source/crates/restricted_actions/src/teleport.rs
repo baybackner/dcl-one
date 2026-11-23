@@ -13,7 +13,7 @@ use scene_runner::{
     },
     load_timing::scene_is_halted,
     permissions::Permission,
-    renderer_context::RendererSceneContext,
+    renderer_context::{RendererSceneContext, STARTUP_TICKS},
     update_world::{gltf_container::GLTF_LOADING, mesh_collider::SceneColliderData},
     OutOfWorld,
 };
@@ -209,7 +209,7 @@ pub fn handle_out_of_world(
         // session, and it may sit at a breakpoint (or paused before its first tick) forever.
         if !halted
             && !context.inspected
-            && (context.tick_number <= 5 || !context.blocked.is_empty())
+            && (context.tick_number <= STARTUP_TICKS || !context.blocked.is_empty())
         {
             debug!("scene not ready");
         } else {

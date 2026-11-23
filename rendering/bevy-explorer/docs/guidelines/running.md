@@ -231,14 +231,17 @@ State, in every build:
   `renderedFrames` (1 once a frame with the ready scene was presented), `settleMs` and `settled`.
   A parcel with no scene settles on landing (`sceneState:"none"`, a `warning`); a failed, broken
   or frozen scene ends the wait at once with `settled:false` and a `warning`; the timeout (60 s by
-  default, at most 300) answers `settled:false` with a `warning` naming what it waited for.
-  Without `--wait` it answers at once.
+  default, at most 300, counted from the command, a realm change included) answers
+  `settled:false` with a `warning` naming what it waited for; one that expires during the realm
+  change has no `sceneHash`. Without `--wait` it answers at once, and `--timeout-seconds` without
+  `--wait` is an error.
 - `/reload --current --wait [--timeout-seconds S]` (or `/reload <hash> --wait`): reloads the scene
-  and answers once the new instance runs, has reached tick 5 and a frame with it was presented:
+  and answers once the new instance runs, shows its content and a frame with it was presented:
   `reloaded`, `sceneHash`, `sceneState`, `ticksWaited`, `renderedFrames`, `settleMs`, `settled`, a
   `hint` that the scene starts from scratch (its counters and scene-UI ids are new), or a
-  `warning` when it expired. A ready scene is `running` at tick 5, the tick the load timing counts
-  a scene loaded at. `/reload` with neither a hash nor `--current` reloads every scene and
+  `warning` when it expired. A ready scene is `running` past tick 5 with nothing blocking it (its
+  glTFs loaded), which is when its content replaces its stand-ins and a teleport releases the
+  player; until then it is `starting` or `blocked`. `/reload` with neither a hash nor `--current` reloads every scene and
   takes no `--wait`.
 - `/scene_state`: JSON of the parcel scene under the player: `playerParcel`, `outOfWorld`,
   `sceneId` (the hash), `title`, `parcel` (its base), `state` (`loading`, `failed`, `starting`,

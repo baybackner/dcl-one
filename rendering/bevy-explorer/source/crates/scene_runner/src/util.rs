@@ -205,12 +205,13 @@ struct ReloadCommand {
     /// Reload only the non-portable parcel scene under the player.
     #[arg(long, conflicts_with = "hash")]
     current: bool,
-    /// Reply once the new scene runs, has reached tick 5 and a frame with it was drawn: JSON with
-    /// `settled`, `sceneState`, `ticksWaited`, `renderedFrames`, `settleMs` (needs a scene).
+    /// Reply once the new scene runs, shows its content (past tick 5, nothing blocking it) and a
+    /// frame with it was drawn: JSON with `settled`, `sceneState`, `ticksWaited`,
+    /// `renderedFrames`, `settleMs` (needs a scene).
     #[arg(long)]
     wait: bool,
     /// How long --wait waits, in seconds (60 by default).
-    #[arg(long)]
+    #[arg(long, requires = "wait")]
     timeout_seconds: Option<f32>,
 }
 
@@ -228,9 +229,9 @@ fn reload_command(
         timeout_seconds,
     })) = input.take()
     {
-        let timeout = match (wait, settle::timeout_seconds(timeout_seconds)) {
-            (true, Err(e)) => return input.reply_failed(e),
-            (_, timeout) => timeout.unwrap_or(settle::DEFAULT_TIMEOUT_SECONDS),
+        let timeout = match settle::wait_timeout(wait, timeout_seconds) {
+            Ok(timeout) => timeout,
+            Err(e) => return input.reply_failed(e),
         };
         if current {
             let Some(current) = targets.ready_hash(&live_scenes) else {
@@ -245,14 +246,14 @@ fn reload_command(
                     input.reply_failed(format!("{hash} not found"));
                     return;
                 };
-                if wait {
+                if let Some(timeout) = timeout {
                     let rx = waits.reload(hash, replaced, timeout);
                     pending.push_oneshot(rx, |r| r, input.take_responder());
                 } else {
                     input.reply_ok(format!("{hash} reloaded"));
                 }
             }
-            None if wait => {
+            None if timeout.is_some() => {
                 input.reply_failed("--wait waits for one scene: give its hash or --current")
             }
             None => {

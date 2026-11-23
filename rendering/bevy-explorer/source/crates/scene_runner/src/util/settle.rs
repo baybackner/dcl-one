@@ -10,50 +10,56 @@ use common::{
 use serde_json::{json, Value};
 
 use crate::{
-    debug_panel::{scene_on_parcel, stage_name, NO_SCENE},
+    debug_panel::{scene_on_parcel, Stage, NO_SCENE},
     initialize_scene::{LiveScenes, SceneHash, SceneLoading, ScenePointers, SuperUserScene},
-    load_timing::{scene_is_halted, READY_TICK},
-    renderer_context::RendererSceneContext,
+    load_timing::scene_is_halted,
+    renderer_context::{RendererSceneContext, STARTUP_TICKS},
     vec3_to_parcel,
 };
 
 /// Frames waited once the scene is ready, so the frame it first drew in has been presented: the
 /// render world draws a frame while the main world runs the next one.
 const PRESENT_FRAMES: u32 = 2;
-pub const DEFAULT_TIMEOUT_SECONDS: f32 = 60.0;
+const DEFAULT_TIMEOUT_SECONDS: f32 = 60.0;
 const MAX_TIMEOUT_SECONDS: f32 = 300.0;
 
-/// `--timeout-seconds` of a settling command, checked.
-pub fn timeout_seconds(timeout: Option<f32>) -> Result<f32, String> {
-    let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+/// The `--wait [--timeout-seconds S]` pair of a settling command, checked: how long to wait, or
+/// `None` for a command that does not wait.
+pub fn wait_timeout(wait: bool, timeout_seconds: Option<f32>) -> Result<Option<f32>, String> {
+    if !wait {
+        return Ok(None);
+    }
+    let timeout = timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
     if !timeout.is_finite() || timeout <= 0.0 || timeout > MAX_TIMEOUT_SECONDS {
         return Err(format!(
             "--timeout-seconds takes more than 0 and at most {MAX_TIMEOUT_SECONDS}; got {timeout}"
         ));
     }
-    Ok(timeout)
+    Ok(Some(timeout))
 }
 
-/// A scene's lifecycle state as the settling replies and `/scene_state` name it: `loading`
-/// (definition, main.crdt or JavaScript still being fetched), `failed`, `starting` (running, not
-/// yet [`READY_TICK`]), `blocked`, `broken` or `running`.
+/// A scene's lifecycle state as the settling replies and `/scene_state` name it, from its
+/// [`Stage`]: `loading` (definition, main.crdt or JavaScript still being fetched), `failed`,
+/// `starting` (running, still in its [`STARTUP_TICKS`]), `blocked`, `broken` or `running`.
 fn state_name(
     loading: Option<&SceneLoading>,
     context: Option<&RendererSceneContext>,
 ) -> &'static str {
-    match (loading, context) {
-        (Some(SceneLoading::Failed), _) => "failed",
-        (Some(_), _) | (None, None) => "loading",
-        (None, Some(context)) if context.broken() => "broken",
-        (None, Some(context)) if !context.blocked.is_empty() => "blocked",
-        (None, Some(context)) if context.tick_number < READY_TICK => "starting",
-        _ => "running",
+    match Stage::of(loading, context) {
+        Stage::Failed => "failed",
+        Stage::Broken => "broken",
+        Stage::Blocked => "blocked",
+        Stage::Running if context.is_some_and(|c| c.tick_number <= STARTUP_TICKS) => "starting",
+        Stage::Running => "running",
+        _ => "loading",
     }
 }
 
-/// Whether the scene runs and has ticked to [`READY_TICK`].
+/// Whether the scene runs with its content shown ([`RendererSceneContext::content_shown`]: past
+/// its [`STARTUP_TICKS`], nothing blocking it). A halted scene shows what it has and is never
+/// ready ([`never_ready`]).
 fn is_ready(loading: Option<&SceneLoading>, context: Option<&RendererSceneContext>) -> bool {
-    state_name(loading, context) == "running"
+    loading.is_none() && context.is_some_and(|c| c.content_shown() && !scene_is_halted(c))
 }
 
 /// Why the scene will never be ready, for one that failed to load or is halted
@@ -183,15 +189,29 @@ pub(super) fn settle_scenes(
         if wait.sender.as_ref().is_none_or(|s| s.is_closed()) {
             return false;
         }
+        wait.elapsed += dt;
         if let Some(gate) = wait.gate.as_mut() {
             match gate.poll_once() {
-                Ok(None) => return true,
+                Ok(None) if wait.elapsed < wait.timeout => return true,
+                // the realm change counts against the timeout too
+                Ok(None) => {
+                    wait.reply["arrived"] = json!(false);
+                    wait.reply["sceneReady"] = json!(false);
+                    wait.reply["sceneState"] = json!("loading");
+                    wait.reply["renderedFrames"] = json!(0);
+                    wait.reply["settleMs"] = json!((wait.elapsed * 1000.0).round());
+                    wait.reply["settled"] = json!(false);
+                    let warning = format!(
+                        "timed out after {} s. Waiting for the realm change.",
+                        wait.timeout
+                    );
+                    return wait.finish_with_warning(Some(warning));
+                }
                 Ok(Some(Ok(()))) => wait.gate = None,
                 Ok(Some(Err(e))) => return wait.finish(Err(e)),
                 Err(()) => return wait.finish(Err("the teleport was cancelled".to_owned())),
             }
         }
-        wait.elapsed += dt;
 
         // the scene entity to watch, or why there is none yet
         let entity = match &mut wait.target {
@@ -370,7 +390,7 @@ pub(super) fn scene_state_command(
     reply["isReady"] = json!(is_ready(loading, context));
     reply["loadingStage"] = json!(match state {
         "starting" => "Starting",
-        _ => stage_name(loading, context),
+        _ => Stage::of(loading, context).name(),
     });
     if let Some(context) = context {
         reply["title"] = json!(context.title);
@@ -390,6 +410,7 @@ pub(super) fn scene_state_command(
 mod tests {
     use std::time::Duration;
 
+    use common::rpc::RpcResultSender;
     use dcl_types::SceneId;
 
     use crate::{initialize_scene::PointerResult, renderer_context::FROZEN_BLOCK};
@@ -459,20 +480,30 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_is_ready_after_its_second_update() {
+    fn a_scene_is_ready_once_its_content_is_shown() {
         let mut app = app();
-        for (tick, state) in [(0, "starting"), (3, "starting"), (READY_TICK, "running")] {
+        for (tick, state) in [
+            (0, "starting"),
+            (STARTUP_TICKS, "starting"),
+            (STARTUP_TICKS + 1, "running"),
+        ] {
             let root = scene(&mut app, "h", tick);
-            let context = app.world().get::<RendererSceneContext>(root);
-            assert_eq!(state_name(None, context), state);
+            let context = app.world().get::<RendererSceneContext>(root).unwrap();
+            assert_eq!(state_name(None, Some(context)), state);
+            // the rule the scene's stand-ins go by
+            assert_eq!(is_ready(None, Some(context)), context.content_shown());
+            assert_eq!(is_ready(None, Some(context)), state == "running");
         }
         let root = scene(&mut app, "h", 10);
         let mut context = app
             .world_mut()
             .get_mut::<RendererSceneContext>(root)
             .unwrap();
-        context.blocked.insert("frozen");
+        context.blocked.insert(FROZEN_BLOCK);
         assert_eq!(state_name(None, Some(&*context)), "blocked");
+        // a frozen scene shows what it has, and is not ready
+        assert!(context.content_shown());
+        assert!(!is_ready(None, Some(&*context)));
         assert_eq!(state_name(Some(&SceneLoading::Failed), None), "failed");
         assert_eq!(
             state_name(Some(&SceneLoading::SceneEntity), None),
@@ -501,7 +532,7 @@ mod tests {
         app.world_mut()
             .get_mut::<RendererSceneContext>(new)
             .unwrap()
-            .tick_number = READY_TICK;
+            .tick_number = STARTUP_TICKS + 1;
         // ready, then the frame drawn with it is presented two frames later
         assert!(step(&mut app, &mut rx, 0.1).is_none());
         assert!(step(&mut app, &mut rx, 0.1).is_none());
@@ -509,7 +540,7 @@ mod tests {
         assert_eq!(reply["reloaded"], true);
         assert_eq!(reply["settled"], true);
         assert_eq!(reply["sceneState"], "running");
-        assert_eq!(reply["ticksWaited"], READY_TICK);
+        assert_eq!(reply["ticksWaited"], STARTUP_TICKS + 1);
         assert_eq!(reply["renderedFrames"], 1);
         assert!(reply["hint"].is_string());
         assert!(reply.get("warning").is_none());
@@ -560,6 +591,28 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Waiting for the scene to spawn again."));
+    }
+
+    #[test]
+    fn a_realm_change_that_never_answers_times_out() {
+        let mut app = app();
+        let (_response, gate) = RpcResultSender::<Result<(), String>>::channel();
+        let mut rx = app.world_mut().resource_mut::<SceneWaits>().arrival(
+            IVec2::ZERO,
+            1.0,
+            Some(gate),
+            json!({ "realm": "a.dcl.eth" }),
+        );
+        assert!(step(&mut app, &mut rx, 0.6).is_none());
+        let reply = step(&mut app, &mut rx, 0.6).unwrap();
+        assert_eq!(reply["realm"], "a.dcl.eth");
+        assert_eq!(reply["arrived"], false);
+        assert_eq!(reply["settled"], false);
+        assert!(reply["warning"]
+            .as_str()
+            .unwrap()
+            .contains("Waiting for the realm change."));
+        assert_eq!(app.world().resource::<SceneWaits>().pending(), 0);
     }
 
     #[test]

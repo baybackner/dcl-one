@@ -39,7 +39,7 @@ does not have yet (durations, refusals, entity ids) is added here with its first
    `/entity_screen_position`) take logical pixels; `/click_at --normalized` takes the normalized
    form.
 3. **Waiting.** A command asked to wait for its effect (`--wait`) waits inside the engine, bounded
-   by `--timeout-seconds`, and replies what it observed. A wait that ends without the effect is
+   by `--timeout-seconds` from the moment it is run, and replies what it observed. A wait that ends without the effect is
    still a reply, not a failure: it says so in a field (`settled: false`) and carries a `warning`
    naming what it waited for, or why the effect will not come.
 
@@ -57,9 +57,11 @@ does not have yet (durations, refusals, entity ids) is added here with its first
   own commands (`/goto`, `/world`, `/help`, bare `/reload`) and refuses the ones it hides.
 - `/click_at` replies JSON: `x`, `y`, `normalized`, `button`, `screen` and, on the web, `input`.
 - A value holding a lone `"` is quoted or escaped on non-JSON commands.
-- `/teleport --wait` and `/reload --wait` reply once the parcel scene has settled; a scene is
-  ready by the rule the load timing and the teleport's release of the player use
-  (`scene_runner::load_timing`), so a broken or frozen scene ends a wait at once.
+- `/teleport --wait` and `/reload --wait` reply once the parcel scene has settled. A scene is
+  ready when its content is shown (`RendererSceneContext::content_shown`: past its startup ticks
+  with nothing blocking it), the rule its stand-ins are removed by and the teleport releases the
+  player on. A broken or frozen scene will not get there (`load_timing::scene_is_halted`), so it
+  ends a wait at once. A realm change counts against the same timeout.
 
 ## Alternatives considered
 
