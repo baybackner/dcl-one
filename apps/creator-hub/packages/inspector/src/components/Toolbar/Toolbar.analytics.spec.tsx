@@ -39,7 +39,6 @@ vi.mock('../../hooks/sdk/useInspectorUIState', () => ({
 }));
 
 vi.mock('./Gizmos', () => ({ Gizmos: () => null }));
-vi.mock('./Preferences', () => ({ Preferences: () => null }));
 
 const pressCtrl = (key: string, options: { shiftKey?: boolean } = {}) =>
   fireEvent.keyDown(document, {

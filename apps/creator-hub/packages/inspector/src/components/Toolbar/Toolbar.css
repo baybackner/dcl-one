@@ -39,7 +39,7 @@
   margin: 0;
   padding: 0;
   border: 1px solid var(--palette-neutral-onyx);
-  border-radius: 6px;
+  border-radius: var(--shape-borderRadius);
   background-color: var(--tree-bg-color);
   color: var(--palette-neutral-gray4);
   cursor: pointer;
@@ -83,12 +83,12 @@
 }
 
 .Toolbar .ToolbarButton.undo {
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--shape-borderRadius) 0 0 var(--shape-borderRadius);
 }
 
 .Toolbar .ToolbarButton.redo {
   margin-left: -7px;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--shape-borderRadius) var(--shape-borderRadius) 0;
 }
 
 .Toolbar .Gizmos .gizmo {
@@ -100,16 +100,16 @@
 }
 
 .Toolbar .Gizmos .gizmo.free {
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--shape-borderRadius) 0 0 var(--shape-borderRadius);
 }
 
 .Toolbar .Gizmos .gizmo.scale {
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--shape-borderRadius) var(--shape-borderRadius) 0;
 }
 
 .Toolbar .Gizmos .ToolbarButton.snap {
   margin-left: 6px;
-  border-radius: 6px 0 0 6px;
+  border-radius: var(--shape-borderRadius) 0 0 var(--shape-borderRadius);
 }
 
 .Toolbar .Gizmos .ToolbarButton.gizmo[aria-pressed="true"],
@@ -130,7 +130,7 @@
   padding: 0;
   border: 1px solid var(--palette-neutral-onyx);
   border-left-color: var(--palette-whiteTransparent-soft);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--shape-borderRadius) var(--shape-borderRadius) 0;
   background-color: var(--tree-bg-color);
   color: var(--palette-whiteTransparent-backdrop);
   cursor: pointer;
@@ -190,7 +190,7 @@
   gap: 4px;
   width: 240px;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--shape-borderRadiusMedium);
   background-color: var(--base-19);
   color: #fff;
   font-size: 12px;
@@ -217,7 +217,7 @@
   padding: 0 8px 0 4px;
   gap: 4px;
   border: 1px solid var(--palette-neutral-onyx);
-  border-radius: 6px;
+  border-radius: var(--shape-borderRadius);
   background-color: var(--tree-bg-color);
 }
 
@@ -279,7 +279,7 @@
   height: 24px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--shape-borderRadius);
   background: none;
   color: var(--palette-neutral-softWhite);
 }

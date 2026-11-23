@@ -139,7 +139,7 @@ const UIDesignerToolbar = withSdk(({ sdk }) => {
                 value: 'scene-info',
                 label: 'Scene Info',
                 leftIcon: checkboxIcon(isSceneInfoPanelOpen),
-                selected: isSceneInfoPanelOpen,
+                checked: isSceneInfoPanelOpen,
                 onClick: handleToggleSceneInfo,
               },
             ]}

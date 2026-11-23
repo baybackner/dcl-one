@@ -29,7 +29,6 @@ import {
   UNDO_ALT,
   useHotkey,
 } from '../../hooks/useHotkey';
-import { getConfig } from '../../lib/logic/config';
 import type { EditorCameraMode } from '../../lib/renderer/types';
 import { Dropdown } from '../ui';
 import type { Props as OptionProps } from '../ui/Dropdown/Option/types';
@@ -186,17 +185,16 @@ const Toolbar = withSdk(({ sdk }) => {
     label: 'Invert Camera Rotation',
     className: 'invert-rotation',
     leftIcon: checkbox(invertRotation),
-    selected: invertRotation,
+    checked: invertRotation,
     onClick: handleToggleInvertRotation,
   };
 
-  const isBabylon = getConfig().renderer !== 'bevy';
   const moreOptions: OptionProps[] = [
     {
       value: 'autosave',
       label: 'Enable Autosave',
       leftIcon: checkbox(isAutosaveEnabled),
-      selected: isAutosaveEnabled,
+      checked: isAutosaveEnabled,
       onClick: handleToggleAutosave,
     },
     ...(showSceneInfoButton
@@ -205,12 +203,12 @@ const Toolbar = withSdk(({ sdk }) => {
             value: 'scene-info',
             label: 'Scene Info',
             leftIcon: checkbox(isSceneInfoPanelOpen),
-            selected: isSceneInfoPanelOpen,
+            checked: isSceneInfoPanelOpen,
             onClick: handleToggleSceneInfo,
           },
         ]
       : []),
-    ...(isBabylon
+    ...(!editorCamera
       ? [
           invertRotationOption,
           {

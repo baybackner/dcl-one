@@ -20,7 +20,7 @@
   height: 20px;
   padding: 0 8px;
   border: 1px solid var(--palette-whiteTransparent-blurry);
-  border-radius: 6px;
+  border-radius: var(--shape-borderRadius);
   background: var(--ui-designer-control-bg);
   color: var(--palette-neutral-softWhite);
   font-size: 12px;

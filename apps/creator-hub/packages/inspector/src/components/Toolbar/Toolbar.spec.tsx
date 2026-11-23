@@ -107,19 +107,23 @@ function createSdk(renderer: Renderer) {
 
 type Options = {
   renderer?: Renderer;
+  configuredRenderer?: Renderer;
   autosaveEnabled?: boolean;
   canSave?: boolean;
   sceneInfo?: boolean;
+  invertRotation?: boolean;
 };
 
 function renderToolbar({
   renderer = 'bevy',
+  configuredRenderer = renderer,
   autosaveEnabled = true,
   canSave = false,
   sceneInfo = true,
+  invertRotation = false,
 }: Options = {}) {
   mocks.sdk = createSdk(renderer);
-  mocks.renderer = renderer;
+  mocks.renderer = configuredRenderer;
   const actions: AnyAction[] = [];
   const record: Middleware = () => next => action => {
     actions.push(action as AnyAction);
@@ -130,7 +134,7 @@ function renderToolbar({
       ui: uiReducer,
       app: () => ({
         canSave,
-        preferences: { autosaveEnabled, freeCameraInvertRotation: false },
+        preferences: { autosaveEnabled, freeCameraInvertRotation: invertRotation },
       }),
       dataLayer: () => ({
         undoRedoState: { canUndo: true, canRedo: false },
@@ -156,6 +160,11 @@ const menuItems = () =>
     .getAllByRole('option')
     .map(option => option.textContent);
 const option = (name: string) => screen.getByRole('option', { name });
+const selectedItems = () =>
+  within(screen.getByRole('listbox'))
+    .getAllByRole('option')
+    .filter(item => item.getAttribute('aria-selected') === 'true')
+    .map(item => item.textContent);
 
 describe('3D toolbar', () => {
   beforeEach(() => {
@@ -307,6 +316,13 @@ describe('3D toolbar', () => {
       expect(menuItems()).toEqual(['Free', 'Player', 'Invert Camera Rotation']);
     });
 
+    it('should select only the camera mode and check Invert Camera Rotation', () => {
+      renderToolbar({ invertRotation: true });
+      openMenu('Camera mode');
+      expect(selectedItems()).toEqual(['Player']);
+      expect(option('Invert Camera Rotation').getAttribute('aria-checked')).toBe('true');
+    });
+
     it('should offer Invert Camera Rotation in the camera menu', () => {
       const { container, actions } = renderToolbar();
       fireEvent.click(container.querySelector('.camera-mode')!);
@@ -316,12 +332,18 @@ describe('3D toolbar', () => {
       expect(sdk().renderer.camera.setInvertRotation).toHaveBeenCalledWith(true);
     });
 
+    it('should keep More options free of Babylon entries when the config names Babylon', () => {
+      renderToolbar({ configuredRenderer: 'babylon' });
+      openMenu('More options');
+      expect(menuItems()).toEqual(['Enable Autosave', 'Scene Info']);
+    });
+
     it('should list only auto-save and Scene Info in More options', () => {
       renderToolbar();
       openMenu('More options');
       expect(menuItems()).toEqual(['Enable Autosave', 'Scene Info']);
-      expect(option('Enable Autosave').getAttribute('aria-selected')).toBe('true');
-      expect(option('Scene Info').getAttribute('aria-selected')).toBe('false');
+      expect(option('Enable Autosave').getAttribute('aria-checked')).toBe('true');
+      expect(option('Scene Info').getAttribute('aria-checked')).toBe('false');
     });
   });
 
@@ -359,7 +381,7 @@ describe('3D toolbar', () => {
       openMenu('More options');
       fireEvent.click(option('Scene Info'));
       openMenu('More options');
-      expect(option('Scene Info').getAttribute('aria-selected')).toBe('true');
+      expect(option('Scene Info').getAttribute('aria-checked')).toBe('true');
     });
 
     it('should open the Babylon inspector', () => {

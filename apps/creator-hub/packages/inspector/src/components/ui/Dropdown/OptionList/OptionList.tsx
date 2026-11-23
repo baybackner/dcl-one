@@ -124,7 +124,7 @@ const OptionList = React.forwardRef<HTMLDivElement, Props>((props, ref) => {
           active={index === activeIndex}
           onMouseEnter={isNavigable(optionProps) ? () => onActiveChange(index) : undefined}
           onClick={optionProps.onClick ?? handleSelectOption}
-          selected={isSelected(optionProps) || !!optionProps.selected}
+          selected={isSelected(optionProps)}
           isField={isField}
           minWidth={minWidth}
         />
