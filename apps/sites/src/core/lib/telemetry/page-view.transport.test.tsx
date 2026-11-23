@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ vi.hoisted(() =>
 );
 
 // The real transport (no mocked `page`): what a cold 404 actually puts on the wire.
-import { useNotFoundPageView } from "./page-view";
+import { lookupSession, useNotFoundPageView } from "./page-view";
 
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -66,6 +66,10 @@ describe("a cold 404's page view on the wire", () => {
     cleanup();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    // Own properties shadow jsdom's: deleting them restores the originals.
+    Reflect.deleteProperty(navigator, "userAgent");
+    Reflect.deleteProperty(navigator, "sendBeacon");
+    Reflect.deleteProperty(window, "__DCL_PUBLIC__");
   });
 
   it("sends 'Not Found' to the proxy with the fetched write key and sid, from one lookup", async () => {
@@ -103,10 +107,16 @@ describe("a cold 404's page view on the wire", () => {
   });
 
   it("sends nothing when the server has no write key either", async () => {
-    session = { ...session, segmentWriteKey: "", segmentApiHost: "" };
+    let answer: (response: Response) => void = () => {};
+    fetchMock.mockImplementation(() => new Promise<Response>((resolve) => (answer = resolve)));
     renderColdNotFound("/missing/no-key");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Settles the page's own in-flight lookup, then lets the page act on its answer.
+    await act(async () => {
+      answer(Response.json({ ...session, segmentWriteKey: "", segmentApiHost: "" }));
+      await lookupSession();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(sendBeacon).not.toHaveBeenCalled();
   });
 });

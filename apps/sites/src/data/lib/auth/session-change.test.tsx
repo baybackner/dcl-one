@@ -71,14 +71,14 @@ describe("session change", () => {
     expect(sessionChangePending()).toBe(false);
   });
 
-  it("reloads root's data in place for a change that asks to, then holds no change", async () => {
-    let reads = 0;
+  function renderRoot() {
+    const loads = { count: 0 };
     const router = createMemoryRouter(
       [
         {
           id: "root",
           path: "/",
-          loader: () => ({ read: ++reads }),
+          loader: () => ({ read: ++loads.count }),
           shouldRevalidate: ({ currentUrl, nextUrl, defaultShouldRevalidate }) =>
             sessionChangePending() || (currentUrl.pathname !== nextUrl.pathname && defaultShouldRevalidate),
           Component: Root,
@@ -89,17 +89,50 @@ describe("session change", () => {
       { initialEntries: ["/events"] },
     );
     const view = render(<RouterProvider router={router} />);
+    return { loads, view, router };
+  }
+
+  it("reloads root's data in place for a change that asks to, then holds no change", async () => {
+    const { loads, view, router } = renderRoot();
     await view.findByText("mounted");
-    expect(reads).toBe(1);
+    expect(loads.count).toBe(1);
 
     act(() => markSessionChanged({ revalidate: true }));
-    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(loads.count).toBe(2));
     await waitFor(() => expect(sessionChangePending()).toBe(false));
+    router.dispose();
+  });
 
-    // A change without `revalidate` waits for the next navigation.
+  it("keeps a change without `revalidate` for the next navigation", async () => {
+    const { loads, view, router } = renderRoot();
+    await view.findByText("mounted");
+
     act(() => markSessionChanged());
     await act(async () => {});
-    expect(reads).toBe(2);
+    expect(loads.count).toBe(1);
     expect(sessionChangePending()).toBe(true);
+
+    await act(() => router.navigate("/places"));
+    await waitFor(() => expect(loads.count).toBe(2));
+    await waitFor(() => expect(sessionChangePending()).toBe(false));
+    router.dispose();
+  });
+
+  it("runs a reload asked for before the router mounted once it mounts", async () => {
+    markSessionChanged({ revalidate: true });
+    const { loads, router } = renderRoot();
+    await waitFor(() => expect(loads.count).toBe(2));
+    await waitFor(() => expect(sessionChangePending()).toBe(false));
+    router.dispose();
+  });
+
+  it("does not reload on mount for a change before it that did not ask to", async () => {
+    markSessionChanged();
+    const { loads, view, router } = renderRoot();
+    await view.findByText("mounted");
+    await act(async () => {});
+    expect(loads.count).toBe(1);
+    expect(sessionChangePending()).toBe(true);
+    router.dispose();
   });
 });
