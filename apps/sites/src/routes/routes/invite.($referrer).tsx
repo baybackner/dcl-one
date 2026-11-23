@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useSearchParams } from "react-router";
+import { data, useSearchParams } from "react-router";
 
 import LdInviteReferralView from "@ui/landings/pages/LdInviteReferralView";
 
@@ -44,7 +44,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 
   const { sid, wrap } = sidLoader(request, context);
 
+  // An invite is someone's: no referrer, or one that names no wallet, is not a page.
+  if (!referrerParam) throw data(null, { status: 404, statusText: "Not Found" });
   const load = await loadInviteReferral(referrerParam, request.signal).catch(() => null);
+  if (load && !load.referrer.address) throw data(null, { status: 404, statusText: "Not Found" });
   return wrap({
     sid,
     step,

@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { fetchEntities, representationHashes } from "./outfit";
+import { baseMeshHidden, computeHiding, fetchEntities, representationHashes } from "./outfit";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -106,4 +106,25 @@ test("a representation's files to download: each hash once, the main model but n
   });
   expect(representationHashes(entity(listed), male.toLowerCase())).toEqual(["h_male", "h_tex"]);
   expect(representationHashes(entity(), male)).toEqual(["h_male"]);
+});
+
+const wearable = (category: string, data: Record<string, unknown> = {}) => ({ metadata: { data: { category, ...data } } });
+const handsHidden = (items: Record<string, ReturnType<typeof wearable>>) =>
+  baseMeshHidden(["basemale_hands_basemesh"], computeHiding(Object.keys(items), new Map(Object.entries(items))));
+
+test("handwear that hides nothing leaves the body's hands showing", () => {
+  expect(handsHidden({ "urn:watch": wearable("hands_wear") })).toBe(false);
+});
+
+test("hiding the handwear category leaves the body's hands showing", () => {
+  expect(handsHidden({ "urn:hat": wearable("hat", { hides: ["hands_wear"] }) })).toBe(false);
+});
+
+test("a wearable that hides hands removes the body's hands", () => {
+  expect(handsHidden({ "urn:gloves": wearable("hands_wear", { hides: ["hands"] }) })).toBe(true);
+});
+
+test("an upper body removes the body's hands unless it lifts the default", () => {
+  expect(handsHidden({ "urn:shirt": wearable("upper_body") })).toBe(true);
+  expect(handsHidden({ "urn:shirt": wearable("upper_body", { removesDefaultHiding: ["hands"] }) })).toBe(false);
 });

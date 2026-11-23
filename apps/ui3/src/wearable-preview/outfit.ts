@@ -310,14 +310,8 @@ const BASE_MESH_HIDERS: [string, (r: HidingRules) => boolean][] = [
   ["ubody_basemesh", (r) => r.equippedCats.has("upper_body") || r.hidden.has("upper_body")],
   ["lbody_basemesh", (r) => r.equippedCats.has("lower_body") || r.hidden.has("lower_body")],
   ["feet_basemesh", (r) => r.equippedCats.has("feet") || r.hidden.has("feet")],
-  [
-    "hands_basemesh",
-    (r) =>
-      r.equippedCats.has("hands_wear") ||
-      r.hidden.has("hands") ||
-      r.hidden.has("hands_wear") ||
-      r.handsDefaultHidden,
-  ],
+  // Handwear sits on the hands: only a wearable that hides `hands`, or an upper body by default, removes them.
+  ["hands_basemesh", (r) => r.hidden.has("hands") || r.handsDefaultHidden],
   ["head_basemesh", (r) => r.hidden.has("head")],
   ["mask_eyes", (r) => r.hidden.has("eyes")],
   ["mask_eyebrows", (r) => r.hidden.has("eyebrows")],
