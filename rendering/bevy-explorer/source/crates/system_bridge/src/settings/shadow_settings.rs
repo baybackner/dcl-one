@@ -1,15 +1,15 @@
 use bevy::{
     ecs::system::{
-        lifetimeless::{SQuery, SRes, SResMut, Write},
+        lifetimeless::{SQuery, SRes, Write},
         SystemParamItem,
     },
-    pbr::{CascadeShadowConfig, DirectionalLightShadowMap, ShadowFilteringMethod},
+    pbr::{CascadeShadowConfig, ShadowFilteringMethod},
     platform::collections::HashSet,
     prelude::*,
 };
 use common::structs::{
-    set_sun_shadow_map_size, sun_cascades, AppConfig, PrimaryCameraRes, ShadowSetting,
-    ShadowlessLight, StageLight, SunShadowMapOverride,
+    sun_cascades, AppConfig, PrimaryCameraRes, ShadowSetting, ShadowlessLight, StageLight,
+    SUN_LOW_MAX_DISTANCE,
 };
 
 use super::{AppSetting, EnumAppSetting, IntAppSetting};
@@ -41,8 +41,6 @@ impl AppSetting for ShadowSetting {
             ),
             Without<ShadowlessLight>,
         >,
-        SRes<SunShadowMapOverride>,
-        SResMut<DirectionalLightShadowMap>,
     );
 
     fn title() -> String {
@@ -53,7 +51,7 @@ impl AppSetting for ShadowSetting {
         format!("How shadows are rendered in the world.\n\n{}", 
         match self {
             ShadowSetting::Off => "Off: No shadows are rendered. Fastest",
-            ShadowSetting::Low => "Low: A single shadow map covering the shadow distance, with hardware 2x2 filtering. Fast, but outlines are blocky, particularly at high shadow distances.",
+            ShadowSetting::Low => "Low: A single shadow map covering the shadow distance up to 40 m, with hardware 2x2 filtering. Fast, but outlines are blocky, particularly at high shadow distances.",
             ShadowSetting::High => "High: Four cascaded soft shadow maps for sharper shadows near the player and better quality at higher shadow distances, but more GPU intensive.",
         })
     }
@@ -72,15 +70,13 @@ impl AppSetting for ShadowSetting {
 
     fn apply(
         &self,
-        (config, cam_res, mut lights, size_override, mut map): SystemParamItem<Self::Param>,
+        (config, cam_res, mut lights): SystemParamItem<Self::Param>,
         mut commands: Commands,
         cameras: &HashSet<Entity>,
     ) {
-        let distance = config.graphics.shadow_distance;
-        apply_shadows(*self, distance, &mut lights);
-        set_sun_shadow_map_size(*self, distance, &size_override, &mut map);
+        apply_shadows(*self, config.graphics.shadow_distance, &mut lights);
 
-        let res = &(config, cam_res, lights, size_override, map);
+        let res = &(config, cam_res, lights);
         for &cam in cameras {
             self.apply_to_camera(res, commands.reborrow(), cam);
         }
@@ -107,9 +103,8 @@ impl AppSetting for ShadowSetting {
     }
 }
 
-// The sun's shadows for a quality and a distance (settings of their own, each applying this and
-// the map size, `set_sun_shadow_map_size`). A stage light keeps its own cascades; a shadowless
-// light is not queried.
+// The sun's shadows for a quality and a distance (settings of their own, each applying this). A
+// stage light keeps its own cascades; a shadowless light is not queried.
 fn apply_shadows(
     setting: ShadowSetting,
     distance: f32,
@@ -163,19 +158,15 @@ impl AppSetting for ShadowDistanceSetting {
             ),
             Without<ShadowlessLight>,
         >,
-        SRes<SunShadowMapOverride>,
-        SResMut<DirectionalLightShadowMap>,
     );
 
     fn apply(
         &self,
-        (config, mut lights, size_override, mut map): SystemParamItem<Self::Param>,
+        (config, mut lights): SystemParamItem<Self::Param>,
         _: Commands,
         _: &HashSet<Entity>,
     ) {
-        let setting = ShadowSetting::load(&config);
-        apply_shadows(setting, self.0 as f32, &mut lights);
-        set_sun_shadow_map_size(setting, self.0 as f32, &size_override, &mut map);
+        apply_shadows(ShadowSetting::load(&config), self.0 as f32, &mut lights);
     }
 
     fn title() -> String {
@@ -183,7 +174,7 @@ impl AppSetting for ShadowDistanceSetting {
     }
 
     fn description(&self) -> String {
-        "Shadow Distance\n\nDistance up to which to render shadows. To ensure that shadows are rendered even for large scenes which are at the edge of the loaded area, this can be set to a higher value (e.g. 2x) than the scene load distance. Higher values increase GPU time slightly, and may result in lower quality shadows at closer distances (particularly with Low shadow quality).".to_owned()
+        format!("Shadow Distance\n\nDistance up to which to render shadows. With Low shadow quality, shadows stop at {SUN_LOW_MAX_DISTANCE} m however far this is set. To ensure that shadows are rendered even for large scenes which are at the edge of the loaded area, this can be set to a higher value (e.g. 2x) than the scene load distance. Higher values increase GPU time slightly, and may result in lower quality shadows at closer distances (particularly with Low shadow quality).")
     }
 
     fn load(config: &AppConfig) -> Self {

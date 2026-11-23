@@ -11,7 +11,7 @@ use alloy_core::primitives::Address;
 use bevy::{
     color::palettes,
     math::DVec3,
-    pbr::{CascadeShadowConfig, DirectionalLightShadowMap},
+    pbr::CascadeShadowConfig,
     platform::collections::{HashMap, HashSet},
     prelude::*,
     render::{primitives::Aabb, view::RenderLayers},
@@ -1168,7 +1168,7 @@ impl Default for GraphicsSettings {
             // FXAA, not MSAA, so depth of field stays on (see `DofSetting::apply_to_camera`)
             msaa: AaSetting::FxaaHigh,
             fps_target: 60,
-            // one cascade, so a short distance keeps its texels small (`sun_shadow_map_size`)
+            // one cascade on the 2048 map (`visuals`), so a short distance keeps its texels small
             shadow_distance: 20.0,
             // one cascade
             shadow_settings: ShadowSetting::Low,
@@ -1352,6 +1352,9 @@ pub const SUN_CASCADE_4_SPLITS: [f32; 3] = [0.102, 0.282, 0.474];
 /// How far from the player a spot light can cast shadows, in metres.
 pub const SPOT_SHADOW_MAX_DISTANCE: f32 = 20.0;
 pub const MIN_CASCADE: f32 = 0.1;
+/// How far Low's one cascade reaches, in metres, whatever the shadow distance: past it the
+/// 2048 map's texels are too large to hold an avatar's shadow (see decisions.md).
+pub const SUN_LOW_MAX_DISTANCE: f32 = 40.0;
 
 /// A light with its own cascades (the lobby stage's key light): the shadow settings only turn its
 /// shadows on or off.
@@ -1368,7 +1371,8 @@ pub struct ShadowlessLight;
 #[derive(Component)]
 pub struct StageCamera;
 
-/// The sun's cascades for a quality and a shadow distance, `None` when it casts no shadows.
+/// The sun's cascades for a quality and a shadow distance, `None` when it casts no shadows. Low's
+/// one cascade stops at `SUN_LOW_MAX_DISTANCE`.
 pub fn sun_cascades(setting: ShadowSetting, distance: f32) -> Option<CascadeShadowConfig> {
     if distance <= 0.0 {
         return None;
@@ -1376,7 +1380,7 @@ pub fn sun_cascades(setting: ShadowSetting, distance: f32) -> Option<CascadeShad
     let far = distance.max(MIN_CASCADE + f32::EPSILON);
     let bounds = match setting {
         ShadowSetting::Off => return None,
-        ShadowSetting::Low => vec![far],
+        ShadowSetting::Low => vec![far.min(SUN_LOW_MAX_DISTANCE)],
         ShadowSetting::High => {
             let mut previous = MIN_CASCADE;
             SUN_CASCADE_4_SPLITS
@@ -1396,44 +1400,6 @@ pub fn sun_cascades(setting: ShadowSetting, distance: f32) -> Option<CascadeShad
         overlap_proportion: 0.2,
         minimum_distance: MIN_CASCADE,
     })
-}
-
-/// The longest shadow distance at which Low's one cascade uses the 2048 map: there a texel covers
-/// what a 4096 texel covers at twice the distance.
-const SUN_SMALL_MAP_DISTANCE: f32 = 40.0;
-
-/// The sun's shadow map size, in texels along one side of each cascade's map. High's four cascades
-/// each cover a slice of the shadow distance, so 2048 is enough. Low's one cascade spreads its map
-/// over the whole distance: 2048 while the distance is short, 4096 past `SUN_SMALL_MAP_DISTANCE`,
-/// where a smaller map loses the avatars' shadows (see decisions.md).
-pub fn sun_shadow_map_size(setting: ShadowSetting, distance: f32) -> usize {
-    match setting {
-        ShadowSetting::High => 2048,
-        ShadowSetting::Off | ShadowSetting::Low if distance <= SUN_SMALL_MAP_DISTANCE => 2048,
-        ShadowSetting::Off | ShadowSetting::Low => 4096,
-    }
-}
-
-/// The sun's shadow map size set live by `/shadow_map`, in place of the shadow settings'
-/// (`sun_shadow_map_size`).
-#[derive(Resource, Default)]
-pub struct SunShadowMapOverride(pub Option<usize>);
-
-/// Puts the sun's shadow map at the `/shadow_map` override, or else at the size for the shadow
-/// quality and distance. The shadow settings and `/shadow_map` each call this when they change.
-pub fn set_sun_shadow_map_size(
-    setting: ShadowSetting,
-    distance: f32,
-    size_override: &SunShadowMapOverride,
-    map: &mut ResMut<DirectionalLightShadowMap>,
-) {
-    let size = size_override
-        .0
-        .unwrap_or_else(|| sun_shadow_map_size(setting, distance));
-    // only write when it changes: a write reallocates every cascade's map
-    if map.size != size {
-        map.size = size;
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -2813,61 +2779,20 @@ mod tests {
         let high = sun_cascades(ShadowSetting::High, 100.0).unwrap();
         assert_eq!(high.bounds, vec![10.2, 28.2, 47.4, 100.0]);
         assert_eq!(high.minimum_distance, MIN_CASCADE);
-        let medium = sun_cascades(ShadowSetting::Low, 60.0).unwrap();
-        assert_eq!(medium.bounds, vec![60.0]);
+        let medium = sun_cascades(ShadowSetting::Low, 20.0).unwrap();
+        assert_eq!(medium.bounds, vec![20.0]);
+        // Low's one cascade stops at 40 m; High's four reach the whole distance
+        for distance in [40.0, 60.0, 300.0] {
+            let low = sun_cascades(ShadowSetting::Low, distance).unwrap();
+            assert_eq!(low.bounds, vec![SUN_LOW_MAX_DISTANCE]);
+        }
+        let far = sun_cascades(ShadowSetting::High, 300.0).unwrap();
+        assert_eq!(far.bounds.last(), Some(&300.0));
         assert!(sun_cascades(ShadowSetting::Off, 60.0).is_none());
         assert!(sun_cascades(ShadowSetting::High, 0.0).is_none());
         // a distance under the minimum still yields a strictly increasing config
         let tiny = sun_cascades(ShadowSetting::High, 0.05).unwrap();
         assert!(tiny.bounds.windows(2).all(|w| w[0] < w[1]) && tiny.bounds[0] > MIN_CASCADE);
-    }
-
-    #[test]
-    fn the_sun_shadow_map_is_4096_only_for_one_cascade_over_a_long_distance() {
-        assert_eq!(sun_shadow_map_size(ShadowSetting::Low, 20.0), 2048);
-        assert_eq!(
-            sun_shadow_map_size(ShadowSetting::Low, SUN_SMALL_MAP_DISTANCE),
-            2048
-        );
-        assert_eq!(sun_shadow_map_size(ShadowSetting::Low, 100.0), 4096);
-        for distance in [20.0, 100.0, 200.0, 300.0] {
-            assert_eq!(sun_shadow_map_size(ShadowSetting::High, distance), 2048);
-        }
-        // the default settings are in the short range
-        let graphics = GraphicsSettings::default();
-        assert_eq!(
-            sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance),
-            2048
-        );
-    }
-
-    #[test]
-    fn the_sun_shadow_map_follows_the_settings_until_it_is_overridden() {
-        use bevy::ecs::system::RunSystemOnce;
-
-        fn set(world: &mut World, setting: ShadowSetting, distance: f32) -> usize {
-            world
-                .run_system_once(
-                    move |size_override: Res<SunShadowMapOverride>,
-                          mut map: ResMut<DirectionalLightShadowMap>| {
-                        set_sun_shadow_map_size(setting, distance, &size_override, &mut map);
-                        map.size
-                    },
-                )
-                .unwrap()
-        }
-
-        let mut world = World::new();
-        world.insert_resource(DirectionalLightShadowMap { size: 2048 });
-        world.init_resource::<SunShadowMapOverride>();
-        // a saved Low at 100 m starts on the large map
-        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 4096);
-        assert_eq!(set(&mut world, ShadowSetting::High, 100.0), 2048);
-        // an override outlasts a change of the settings, and its reset applies at once
-        world.resource_mut::<SunShadowMapOverride>().0 = Some(1024);
-        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 1024);
-        world.resource_mut::<SunShadowMapOverride>().0 = None;
-        assert_eq!(set(&mut world, ShadowSetting::Low, 100.0), 4096);
     }
 
     #[test]

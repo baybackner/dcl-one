@@ -10,9 +10,8 @@ use bevy::{
 };
 use bevy_console::ConsoleCommand;
 use common::structs::{
-    set_sun_shadow_map_size, sun_shadow_map_size, AppConfig, FogSetting, LandscapeDistance,
-    LensFlare, PrimaryCamera, SceneLoadDistance, SessionGraphics, StageLight, SunShadowMapOverride,
-    TimeOfDay,
+    AppConfig, FogSetting, LandscapeDistance, LensFlare, PrimaryCamera, SceneLoadDistance,
+    SessionGraphics, StageLight, TimeOfDay,
 };
 use console::{AddDebugSection, DebugInput, DebugInputKind, DebugSection, DoAddConsoleCommand};
 use serde_json::json;
@@ -62,7 +61,6 @@ pub(super) struct VisualsDebugPanelPlugin;
 
 impl Plugin for VisualsDebugPanelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SunShadowMapOverride>();
         app.insert_resource(LandscapeLayers {
             ground: true,
             trees: true,
@@ -178,14 +176,10 @@ impl Plugin for VisualsDebugPanelPlugin {
                 ("Shadow quality", "quality"),
                 ("Shadow distance (m)", "distance"),
                 ("Cascade far bounds (m)", "cascades"),
-                ("Default map size (texels)", "presetMapSize"),
                 ("Bias overridden", "overridden"),
                 ("Default bias (depth m / normal texels)", "presetBias"),
             ],
-            actions: &[
-                ("Restore default bias", "/shadowbias --reset"),
-                ("Restore default map size", "/shadow_map --reset"),
-            ],
+            actions: &[("Restore default bias", "/shadowbias --reset")],
             inputs: &[
                 DebugInput {
                     label: "Shadow map size (texels)",
@@ -194,7 +188,7 @@ impl Plugin for VisualsDebugPanelPlugin {
                     kind: DebugInputKind::Select(&[
                         ("512", "512"),
                         ("1024", "1024"),
-                        ("2048", "2048"),
+                        ("2048 (default)", "2048"),
                         ("4096", "4096"),
                     ]),
                 },
@@ -559,9 +553,6 @@ fn sun_shadows(
     if let Some(Ok(_)) = cmd.take() {
         let preset = SUN_SHADOW_BIAS;
         let (depth, normal) = bias.0.unwrap_or(preset);
-        let graphics = &config.graphics;
-        let preset_map_size =
-            sun_shadow_map_size(graphics.shadow_settings, graphics.shadow_distance);
         // every sun layer shares one config; read the first that casts shadows
         let cascades = sun
             .iter()
@@ -570,7 +561,6 @@ fn sun_shadows(
         cmd.reply_ok(
             json!({"quality":format!("{:?}", config.graphics.shadow_settings),
             "distance":config.graphics.shadow_distance, "mapSize":map.size.to_string(),
-            "presetMapSize":preset_map_size,
             "cascades":cascades, "overridden":bias.0.is_some(), "presetBias":[preset.0, preset.1],
             "depthBias":depth, "normalBias":normal})
             .to_string(),
@@ -578,39 +568,26 @@ fn sun_shadows(
     }
 }
 
-/// Set the sun's shadow map size in texels per cascade until restart, in place of the shadow
-/// settings', to compare cost, look and biases at another resolution; `--reset` goes back to the
-/// settings' size. The normal bias is in texels, so the same value offsets further on a smaller
-/// map.
+/// Set the sun's shadow map size in texels per cascade until restart, to compare biases at
+/// another resolution. The normal bias is in texels, so the same value offsets further on a
+/// smaller map.
 #[derive(clap::Parser, ConsoleCommand)]
 #[command(name = "/shadow_map")]
 struct SunShadowMap {
-    #[arg(required_unless_present = "reset")]
-    size: Option<usize>,
-    #[arg(long, conflicts_with = "size")]
-    reset: bool,
+    size: usize,
 }
 
 fn sun_shadow_map(
     mut cmd: ConsoleCommand<SunShadowMap>,
-    config: Res<AppConfig>,
-    mut size_override: ResMut<SunShadowMapOverride>,
     mut map: ResMut<DirectionalLightShadowMap>,
 ) {
-    if let Some(Ok(SunShadowMap { size, .. })) = cmd.take() {
-        if size.is_some_and(|size| !(256..=8192).contains(&size) || !size.is_power_of_two()) {
+    if let Some(Ok(SunShadowMap { size })) = cmd.take() {
+        if !(256..=8192).contains(&size) || !size.is_power_of_two() {
             cmd.reply_failed("shadow map size must be a power of two from 256 to 8192");
             return;
         }
-        size_override.0 = size;
-        let graphics = &config.graphics;
-        set_sun_shadow_map_size(
-            graphics.shadow_settings,
-            graphics.shadow_distance,
-            &size_override,
-            &mut map,
-        );
-        cmd.reply_ok(format!("sun shadow map {} texels", map.size));
+        map.size = size;
+        cmd.reply_ok(format!("sun shadow map {size} texels"));
     }
 }
 
