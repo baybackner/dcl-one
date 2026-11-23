@@ -1,15 +1,14 @@
 import type { DeepReadonlyObject, IEngine, PBVideoPlayer, Entity } from '@dcl/ecs';
-import ReactEcs, { UiEntity, Input } from '@dcl/react-ecs';
+import ReactEcs, { UiEntity } from '@dcl/react-ecs';
 import { openExternalUrl } from '~system/RestrictedActions';
-import { LIVEKIT_STREAM_SRC } from '../../definitions';
 import { COLORS, RADIUS, SPACING, TYPE } from '../theme';
-import { SectionHeader, FieldLabel, Icon } from '../Primitives';
+import { SectionHeader, FieldLabel, Icon, TextField } from '../Primitives';
 import { PillButton } from '../Controls';
 import { VolumeSlider } from './VolumeSlider';
-import { createVideoPlayerControls, isVideoUrl } from './utils';
+import { docsUrl } from '../fetch-utils';
+import { createVideoPlayerControls, isVideoUrl, urlAction } from './utils';
 
-const VIDEO_PLAYER_HELP_URL =
-  'https://docs.decentraland.org/creator/scene-editor/interactivity/video-screen';
+const VIDEO_PLAYER_HELP = '/creator/scene-editor/interactivity/video-screen';
 
 export function VideoControlURL({
   engine,
@@ -21,14 +20,15 @@ export function VideoControlURL({
   video: DeepReadonlyObject<PBVideoPlayer> | undefined;
 }) {
   const [videoURL, setVideoURL] = ReactEcs.useState('');
+  const url = video?.src?.startsWith('livekit-video://') ? '' : (video?.src ?? '');
+  ReactEcs.useEffect(() => setVideoURL(url), [entity]);
+  // The URL that any admin puts on the screen is the field's text on every panel.
   ReactEcs.useEffect(() => {
-    const url = video?.src?.startsWith('livekit-video://') ? '' : video?.src;
-    setVideoURL(url ?? '');
-  }, [entity]);
+    if (url) setVideoURL(url);
+  }, [url]);
   const controls = createVideoPlayerControls(entity, engine);
   const isActive = !!(video && isVideoUrl(video.src));
-  const changed = !!(video?.src && videoURL !== video.src && video.src !== LIVEKIT_STREAM_SRC);
-  const primaryLabel = isActive && !changed ? 'Deactivate' : changed ? 'Update' : 'Activate';
+  const primaryLabel = urlAction(video?.src, videoURL);
 
   return (
     <UiEntity uiTransform={{ flexDirection: 'column', width: '100%' }}>
@@ -38,7 +38,7 @@ export function VideoControlURL({
           <UiEntity
             uiTransform={{ width: 16, height: 16 }}
             uiBackground={{ color: COLORS.transparent }}
-            onMouseDown={() => openExternalUrl({ url: VIDEO_PLAYER_HELP_URL })}
+            onMouseDown={() => openExternalUrl({ url: docsUrl(VIDEO_PLAYER_HELP) })}
           >
             <Icon
               name="help"
@@ -60,25 +60,11 @@ export function VideoControlURL({
       />
 
       <UiEntity uiTransform={{ flexDirection: 'row', alignItems: 'center', width: '100%' }}>
-        <Input
+        <TextField
           onChange={setVideoURL}
           value={videoURL}
-          fontSize={TYPE.body}
-          textAlign="middle-left"
           placeholder="Paste your video URL"
-          placeholderColor={COLORS.inputPlaceholder}
-          color={COLORS.inputText}
-          uiBackground={{ color: COLORS.inputBackground }}
-          uiTransform={{
-            flexGrow: 1,
-            flexBasis: 0,
-            minWidth: 0,
-            height: 40,
-            borderRadius: RADIUS.md,
-            borderWidth: 1,
-            borderColor: COLORS.inputBorder,
-            margin: { right: SPACING.md },
-          }}
+          uiTransform={{ flexGrow: 1, flexBasis: 0, minWidth: 0, margin: { right: SPACING.md } }}
         />
         <PillButton
           id="video_control_url_activate"
