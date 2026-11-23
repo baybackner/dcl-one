@@ -446,6 +446,21 @@ pub async fn scene_owner_or_admin_decision(
     }
 }
 
+/// Whether a source can name the owner of `place` now
+/// (`AccessPolicy::owner_source_ready`). Without one the owner-or-admin
+/// decision refuses the owner too. A place with no world and no parcel has no
+/// owner to name.
+pub(crate) async fn owner_source_ready(state: &CommsState, place: &PlaceLookup<'_>) -> bool {
+    match place.get().await {
+        Ok(Some(row)) if row.world => match row.world_name.as_deref().and_then(world_of) {
+            Some(world) => state.policy.owner_source_ready(Some(&world)).await,
+            None => true,
+        },
+        Ok(Some(row)) if !row.positions.is_empty() => state.policy.owner_source_ready(None).await,
+        _ => true,
+    }
+}
+
 /// Upstream's `isSceneOwnerOrAdmin`, the gate of every scene-signed write
 /// (admins, bans, the stream key, Cast): the owner-or-admin decision, or,
 /// failing that, an extended holder of the place (a world deployment or

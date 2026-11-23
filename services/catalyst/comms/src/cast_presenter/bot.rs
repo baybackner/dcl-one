@@ -22,7 +22,9 @@
 //!   the room metadata's presenters and carrying `presentation:`, so scene
 //!   traffic never crosses), `roomMetadata {metadata}`, `participantCount
 //!   {count}` (the audience: remote participants but presentation bots and
-//!   the RTMP ingress) and `disconnected {reason}`, after which the bot exits.
+//!   the RTMP ingress) and `disconnected {reason}`, after which the bot exits:
+//!   LiveKit closed the connection (the room was deleted, the bot was removed,
+//!   another bot joined with its token) or it was lost.
 //!
 //! One reader takes the bot's stdout and never waits on the session: replies
 //! complete their commands at once, the room's metadata and participant
@@ -87,8 +89,10 @@ pub trait BotLink: Send + Sync {
     async fn push_frame(&self, frame: &Frame) -> anyhow::Result<()>;
     async fn publish_data(&self, packet: Vec<u8>) -> anyhow::Result<()>;
     async fn update_metadata(&self, metadata: String) -> anyhow::Result<()>;
-    /// Disconnects and releases the bot; never fails.
-    async fn shutdown(&self);
+    /// Disconnects and releases the bot; never fails. `false` when the bot
+    /// ended without leaving its room: it neither answered nor reported
+    /// `disconnected`.
+    async fn shutdown(&self) -> bool;
 }
 
 /// A connected bot, the room's data packets (closed when the bot is gone)
@@ -129,6 +133,9 @@ struct ProcessLink {
     child: Mutex<Option<Child>>,
     pending: Pending,
     next_id: AtomicU64,
+    /// The reader, which ends with the bot's output: whether the bot
+    /// reported `disconnected`.
+    reader: Mutex<Option<tokio::task::JoinHandle<bool>>>,
 }
 
 #[derive(Deserialize)]
@@ -238,28 +245,38 @@ impl BotLink for ProcessLink {
             .await
     }
 
-    async fn shutdown(&self) {
-        let _ =
-            tokio::time::timeout(SHUTDOWN_TIMEOUT, self.command(json!({"type": "shutdown"}))).await;
+    async fn shutdown(&self) -> bool {
+        let shutdown = self.command(json!({"type": "shutdown"}));
+        let answered = matches!(
+            tokio::time::timeout(SHUTDOWN_TIMEOUT, shutdown).await,
+            Ok(Ok(()))
+        );
         self.stdin.lock().await.take();
         if let Some(mut child) = self.child.lock().await.take()
             && tokio::time::timeout(EXIT_WAIT, child.wait()).await.is_err()
         {
             let _ = child.kill().await;
         }
+        let Some(reader) = self.reader.lock().await.take() else {
+            return answered;
+        };
+        let reported = tokio::time::timeout(EXIT_WAIT, reader).await;
+        answered || matches!(reported, Ok(Ok(true)))
     }
 }
 
-/// Reads the bot's stdout until it closes; never waits on the session.
+/// Reads the bot's stdout until it closes; never waits on the session. Gives
+/// whether the bot reported `disconnected`.
 fn spawn_reader(
     stdout: tokio::process::ChildStdout,
     pending: Pending,
     ready_tx: oneshot::Sender<Result<(), ConnectError>>,
     data_tx: mpsc::Sender<RoomData>,
     room_tx: watch::Sender<RoomState>,
-) {
-    crate::shared::task::spawn(async move {
+) -> tokio::task::JoinHandle<bool> {
+    crate::shared::task::spawn_with(async move {
         let mut ready_tx = Some(ready_tx);
+        let mut disconnected = false;
         let mut dropped: u64 = 0;
         // A frame line is ~11 MB, but the bot only sends small lines.
         let mut lines = BufReader::new(stdout).lines();
@@ -326,6 +343,7 @@ fn spawn_reader(
                 ("disconnected", _) => {
                     let reason = line.reason.unwrap_or_default();
                     tracing::warn!(target: "cast_bot", %reason, "bot disconnected from LiveKit");
+                    disconnected = true;
                 }
                 _ => {}
             }
@@ -337,7 +355,8 @@ fn spawn_reader(
         }
         // Fail what is still waiting; dropping the senders tells the session.
         pending.lock().unwrap().clear();
-    });
+        disconnected
+    })
 }
 
 #[async_trait::async_trait]
@@ -364,12 +383,13 @@ impl BotLauncher for ProcessLauncher {
         let (data_tx, data) = mpsc::channel(DATA_QUEUE);
         let (room_tx, room) = watch::channel(RoomState::default());
         let (ready_tx, ready_rx) = oneshot::channel();
-        spawn_reader(stdout, pending.clone(), ready_tx, data_tx, room_tx);
+        let reader = spawn_reader(stdout, pending.clone(), ready_tx, data_tx, room_tx);
         let link = ProcessLink {
             stdin,
             child: Mutex::new(Some(child)),
             pending,
             next_id: AtomicU64::new(1),
+            reader: Mutex::new(Some(reader)),
         };
         let ready = async {
             let init = json_line(&json!({"type": "init", "url": url, "token": token}))

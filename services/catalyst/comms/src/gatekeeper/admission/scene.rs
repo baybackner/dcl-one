@@ -65,13 +65,13 @@ pub(crate) use lookup::{
 };
 #[path = "scene_policy.rs"]
 mod policy;
-pub(crate) use policy::try_get_lease_holders_for_parcels;
 pub use policy::{
     SceneCaches, WorldAccess, ensure_target_not_protected, get_extra_addresses,
     get_lease_holders_for_parcels, has_world_access_permission, holds_extended_permission,
     names_for, scene_manager_decision, scene_owner_or_admin_decision, try_get_extra_addresses,
     world_access,
 };
+pub(crate) use policy::{owner_source_ready, try_get_lease_holders_for_parcels};
 #[path = "scene_effects.rs"]
 mod effects;
 pub use effects::{RoomContext, add_admin, add_ban, remove_admin, remove_ban, resolve_rooms};

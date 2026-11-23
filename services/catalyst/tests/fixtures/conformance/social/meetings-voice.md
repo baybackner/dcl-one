@@ -187,10 +187,14 @@ MV-1 to MV-4 (Cast routes, watcher token, the `apps/sites` streamer and watcher,
      participant, so two bots in one room keep each other alive.
    - A bot token runs one presentation: the same token again answers 409 `This token already has a
      presentation` until the first stops. Upstream starts it, and LiveKit drops the first bot. With a
-     token each, a room holds several presentations, as upstream.
+     token each, a room holds several presentations, as upstream. The 409 is one process's: on another
+     API replica the token starts as upstream, the first bot reports that LiveKit dropped it, and its
+     session ends without a message to the room.
    - A bot whose process ends without leaving is removed from its room at once, after the node sends
      `presentation:stopped` through the room service. Upstream leaves it to LiveKit, which keeps the
-     participant and its last slide about 20 s.
+     participant and its last slide about 20 s. A bot that LiveKit disconnected (room deleted,
+     participant removed, its token started again) is not removed and the node sends nothing: viewers
+     see the bot leave, or the new bot in its place.
    - PDFs render with hayro, not pdfjs: pixels differ, and annotation appearance streams are not drawn.
    - `ws://` LiveKit URLs are accepted on loopback hosts.
    - The SSRF resolver reads the hosts file.

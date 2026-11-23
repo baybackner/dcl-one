@@ -54,8 +54,7 @@ pub fn spawn_jobs(state: &Arc<CommsState>, jobs: &Jobs) {
                             // LAND or NAME transfer, a world permission edit.
                             Workflow::Recheck => {
                                 let page = super::cast::Keys::After(&cursor);
-                                super::cast::recheck_keys(&state, page).await;
-                                Ok(())
+                                Ok(super::cast::try_recheck_keys(&state, page).await?)
                             }
                             Workflow::Cleanup => drain_cleanup(&state).await,
                         }
@@ -433,12 +432,17 @@ const RESET_REPLACEMENT_GRACE: chrono::Duration = chrono::Duration::hours(1);
 async fn deliver(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), ApiError> {
     // Each failure is logged here: the caller reports one of them.
     let failed = |error: &ApiError| tracing::warn!(access_id = %row.access_id, %error, "stream cleanup step failed");
-    let ingress = delete_ingress(state, row, token).await.inspect_err(failed);
+    let ingress = match delete_ingress(state, row, token).await {
+        // Another worker holds the row now: it evicts and tells the owner.
+        Ok(false) => return Err(ApiError::internal("stream cleanup lease lost")),
+        ingress => ingress.map(drop).inspect_err(failed),
+    };
     let evicted = evict_publishers(state, row).await.inspect_err(failed);
     notify(state, row, token).await.and(ingress).and(evicted)
 }
 
-async fn delete_ingress(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), ApiError> {
+/// Returns `false` when the claim of this worker on the row is lost.
+async fn delete_ingress(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<bool, ApiError> {
     if !row.ingress_deleted {
         if let Some(id) = row.ingress_id.as_deref().filter(|id| !id.is_empty()) {
             // LiveKit answers when the ingress worker stopped the push.
@@ -449,11 +453,9 @@ async fn delete_ingress(state: &CommsState, row: &Cleanup, token: Uuid) -> Resul
         }
         let changed = sqlx::query("UPDATE social.scene_stream_cleanup SET ingress_deleted=true WHERE access_id=$1 AND claim_token=$2")
             .bind(row.access_id).bind(token).execute(&state.pool).await?;
-        if changed.rows_affected() == 0 {
-            return Err(ApiError::internal("stream cleanup lease lost"));
-        }
+        return Ok(changed.rows_affected() > 0);
     }
-    Ok(())
+    Ok(true)
 }
 
 async fn notify(state: &CommsState, row: &Cleanup, token: Uuid) -> Result<(), ApiError> {

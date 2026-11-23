@@ -472,6 +472,13 @@ impl LandAuthzState {
         }
     }
 
+    /// Whether a LAND rights source can answer now: the index is ready, or a
+    /// marketplace reader is attached. Without one the owner and deploy
+    /// questions answer [`Unavailable::NoSource`].
+    pub async fn has_source(&self) -> bool {
+        self.fallback_reader().is_some() || self.ready().await.is_some()
+    }
+
     /// The marketplace reader, when one with a subgraph URL is attached.
     fn fallback_reader(&self) -> Option<&Arc<ChainIndex>> {
         self.market

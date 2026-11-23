@@ -393,7 +393,9 @@ async fn harness_tuned(
     tune(&mut state);
     let state = Arc::new(state);
     Harness {
-        app: crate::gatekeeper::router(state.clone()),
+        // As behind the social gate, with its switch on.
+        app: crate::gatekeeper::router(state.clone())
+            .layer(axum::Extension(crate::writes::Switch(true))),
         state,
         livekit,
         server,
@@ -3662,6 +3664,37 @@ async fn the_periodic_pass_revokes_a_key_whose_minter_lost_the_place() {
         assert_eq!(key_is_active(&pool, &key).await, kept, "{minter_of_key}");
     }
     assert_revoked(&transferred, &key, &scene.room, &streamer).await;
+}
+
+/// With the social writes switch off, `GET /scene-stream-access` revokes
+/// nothing: a key whose minter lost the place stays, and the answer is that
+/// of a place with no key. With the switch on, the read revokes the key.
+#[tokio::test]
+async fn a_list_revokes_no_key_while_the_social_writes_switch_is_off() {
+    let Some(pool) = scratch().await else { return };
+    let (_, room, metadata) = seeded_scene(&pool).await;
+    let owned = authority_harness(&pool, &room, actor_policy(&pool, &[])).await;
+    let key = stream_link(&owned, KEY, &metadata).await;
+    let owner: crate::access::LandOperators =
+        serde_json::from_value(json!({"owner": address_of(OUTSIDER_KEY)})).unwrap();
+    let policy = StubPolicy {
+        land: Ok(Some(Arc::new(Some(owner)))),
+        ..Default::default()
+    };
+    let mut transferred = harness_with(pool.clone(), Some(room), policy, None).await;
+    // A request that did not pass the social gate: its switch counts as off.
+    let ungated = crate::gatekeeper::router(transferred.state.clone());
+    let gated = std::mem::replace(&mut transferred.app, ungated);
+    for (app, stays) in [(None, true), (Some(gated), false)] {
+        if let Some(app) = app {
+            transferred.app = app;
+        }
+        let listed = transferred
+            .signed(OUTSIDER_KEY, "GET", "/scene-stream-access", &metadata, None)
+            .await;
+        let answer = (listed.0, key_is_active(&pool, &key).await);
+        assert_eq!(answer, (StatusCode::NOT_FOUND, stays), "{}", listed.1);
+    }
 }
 
 /// The periodic pass moves its cursor with each key. A pass that is cut in

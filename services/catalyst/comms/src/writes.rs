@@ -7,7 +7,8 @@ use axum::extract::Extension;
 
 /// The switch as a plane's gate saw it, on every request it passes: a `GET`
 /// that writes as a side effect (the MLS key-package claim, the referral
-/// viewed mark, the DM token's connection record) asks [`side_writes_on`].
+/// viewed mark, the DM token's connection record, the revocation of a stale
+/// stream key) asks [`side_writes_on`].
 /// Social's `guard` inserts it.
 #[derive(Clone, Copy, Debug)]
 pub struct Switch(pub bool);

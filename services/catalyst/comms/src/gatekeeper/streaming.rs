@@ -136,6 +136,7 @@ pub async fn scene_stream_access(
     State(state): State<SharedState>,
     OriginalUri(uri): OriginalUri,
     method: Method,
+    switch: Option<axum::Extension<crate::writes::Switch>>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     if !state.livekit.configured {
@@ -236,8 +237,14 @@ pub async fn scene_stream_access(
     let ingress = state.ingress();
     if method == Method::GET {
         // A key the place no longer holds (its scene redeployed, its minter
-        // without the place) is never the one answered.
-        cast::recheck_keys(&state, cast::Keys::Place(&place_id)).await;
+        // without the place) is never the one answered. With the social
+        // writes switch off this read revokes nothing: it answers as a place
+        // with no key.
+        if crate::writes::side_writes_on(switch) {
+            cast::recheck_keys(&state, cast::Keys::Place(&place_id)).await;
+        } else if cast::place_key_ends(&state, &place_id).await {
+            return Err(ApiError::not_found(STREAM_ACCESS_NOT_FOUND_MSG));
+        }
     }
     match method {
         Method::GET => match active_access(&state.pool, &place_id).await? {
@@ -561,18 +568,35 @@ pub(super) async fn barred(
     state: &CommsState,
     wallet: &Address,
     device_id: Option<&str>,
-) -> Result<Option<&'static str>, ApiError> {
+) -> Result<Option<Barred>, ApiError> {
     let now = chrono::Utc::now().naive_utc();
     let (policy, bans) = (state.policy.as_ref(), state.bans.as_ref());
     let ban =
         crate::gatekeeper::moderation::admission_ban(policy, bans, wallet, None, device_id, now);
     Ok(match ban.await? {
-        Some(_) => Some(BANNED),
-        None if state.deny_list.is_denied(wallet.as_str()).await => Some("on the deny list"),
+        Some(_) => Some(Barred::Banned),
+        None if state.deny_list.is_denied(wallet.as_str()).await => Some(Barred::Denied),
         None => None,
     })
 }
-const BANNED: &str = "banned from the platform";
+
+/// Why a wallet is [`barred`].
+#[derive(Clone, Copy)]
+pub(super) enum Barred {
+    /// A platform ban of the wallet or its device.
+    Banned,
+    /// The deny list holds the wallet.
+    Denied,
+}
+
+impl Barred {
+    pub(super) fn why(self) -> &'static str {
+        match self {
+            Self::Banned => "banned from the platform",
+            Self::Denied => "on the deny list",
+        }
+    }
+}
 
 /// Refuses a [`barred`] wallet: 403 for a platform ban, `denied` for the deny list.
 async fn refuse_barred(
@@ -583,11 +607,11 @@ async fn refuse_barred(
 ) -> Result<(), ApiError> {
     match barred(state, signer, device_id).await? {
         None => Ok(()),
-        Some(BANNED) => {
+        Some(Barred::Banned) => {
             tracing::warn!(address = %signer, "rejected a stream key request from a platform-banned user");
             Err(forbidden(PLATFORM_BANNED_MSG))
         }
-        Some(_) => Err(denied),
+        Some(Barred::Denied) => Err(denied),
     }
 }
 

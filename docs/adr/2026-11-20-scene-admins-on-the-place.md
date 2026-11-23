@@ -13,7 +13,7 @@ A grant is on the place of the scene, read from the active deployment by the roo
 
 - A redeploy writes no row. A redeploy of the same place keeps every grant; a scene on a different place starts without admins.
 - An owner change writes no row. Ownership is read when a request arrives.
-- The cleanup of a removed place revokes the grants made before the removal: for a world place, those on the places of the world's active scenes; for a Genesis place, those on its base parcel when no enabled place has that base.
+- The cleanup of a removed place revokes the grants made before the removal: for a world place, those on the places of the world's active scenes when no enabled place of that world remains; for a Genesis place, those on its effective base parcel when no enabled place has that effective base.
 - A lookup of a catalogue place or of a whole world carries a key that no grant has, so a grant on one scene never decides for the world.
 - The release script `schemas/releases/scene-admin-place-keys.sql` moves the grants of active deployments from the entity id to the place. An entity that is active in several places gives each place the grant. Rows of entities that are not deployed stay with their old key, and no request reads them.
 - The move changes the key of live rows, so it is not a numbered step: an API from before the change reads and writes grants by entity id. Old replicas stop before `catalyst schema migrate`, the script runs after it, and `catalyst serve` refuses startup while a grant of an active deployment has the entity key.

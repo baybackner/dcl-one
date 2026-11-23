@@ -67,6 +67,11 @@ pub trait AccessPolicy: Send + Sync {
     async fn is_blocked(&self, actor: &Address) -> Result<bool, AuthorityNotEstablished>;
     /// Whether `actor` administers `scene`.
     async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> PermissionDecision;
+    /// Whether a source can name the owner now: of `world`, or of Genesis
+    /// LAND for `None`. Without one [`Self::is_admin`] refuses every owner.
+    async fn owner_source_ready(&self, _world: Option<&WorldName>) -> bool {
+        true
+    }
     /// The owner and every deployment/streaming grantee of `world` whose
     /// grant is world-wide or touches `parcels`: the wallets a scene ban may
     /// not target.

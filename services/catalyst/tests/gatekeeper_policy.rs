@@ -125,7 +125,7 @@ mod tests {
     /// parcel list (any other document gets an empty page), or, when `fail` is
     /// set, HTTP 500 with `Retry-After: 0`, so the reader spends its retries
     /// without waiting through the backoff ladder.
-    async fn fake_land_subgraph(
+    pub(super) async fn fake_land_subgraph(
         parcels: serde_json::Value,
         fail: Arc<std::sync::atomic::AtomicBool>,
     ) -> String {
@@ -1063,6 +1063,11 @@ mod stream_access {
     use catalyst::worlds::policy::{PersonalWorldsPolicy, Policy};
     use catalyst::worlds::rooms::SceneResolver;
 
+    /// The switch of the social gate, on: the routes are behind that gate.
+    fn social_writes_on() -> axum::Extension<catalyst::comms::writes::Switch> {
+        axum::Extension(catalyst::comms::writes::Switch(true))
+    }
+
     /// An active Genesis scene on one parcel. The scene that held the parcel
     /// is marked as replaced, as the deploy write does (`deleter_deployment`).
     async fn deploy_scene(pool: &sqlx::PgPool, entity_id: &str, parcel: &str) {
@@ -1249,7 +1254,9 @@ mod stream_access {
             Arc::new(catalyst::comms::presence::Presence::new()),
             directory.clone(),
         ));
-        let app = axum::Router::new().nest("/comms-gatekeeper", router(state.clone()));
+        let app = axum::Router::new()
+            .nest("/comms-gatekeeper", router(state.clone()))
+            .layer(social_writes_on());
         let place_id = Uuid::new_v4().to_string();
         // The signer administers the scene, but LAND determines reset/revoke recipients.
         // Self-declared catalogue ownership must not redirect those notifications.
@@ -1677,7 +1684,9 @@ mod stream_access {
             Arc::new(catalyst::comms::presence::Presence::new()),
             Arc::new(catalyst::comms::interfaces::test_support::StubDirectory::default()),
         ));
-        let app = axum::Router::new().nest("/comms-gatekeeper", router(state.clone()));
+        let app = axum::Router::new()
+            .nest("/comms-gatekeeper", router(state.clone()))
+            .layer(social_writes_on());
 
         let tag = Uuid::new_v4().simple().to_string()[..10].to_string();
         let label = format!("strip{tag}");
@@ -2103,7 +2112,9 @@ mod stream_access {
             Arc::new(catalyst::comms::presence::Presence::new()),
             Arc::new(catalyst::comms::interfaces::test_support::StubDirectory::default()),
         ));
-        let app = axum::Router::new().nest("/comms-gatekeeper", router(state.clone()));
+        let app = axum::Router::new()
+            .nest("/comms-gatekeeper", router(state.clone()))
+            .layer(social_writes_on());
 
         let tag = Uuid::new_v4().simple().to_string()[..10].to_string();
         let label = format!("redeploy{tag}");
@@ -2229,6 +2240,190 @@ mod stream_access {
             (StatusCode::UNAUTHORIZED, false),
             "unpublished"
         );
+    }
+
+    /// The gatekeeper routes over `policy`, with an ingress stub.
+    async fn app_over(pool: &sqlx::PgPool, policy: Policy) -> axum::Router {
+        let mut settings = Settings::for_tests();
+        settings.livekit.api_url = ingress_stub().await.0;
+        let state: SharedState = Arc::new(CommsState::new(
+            pool.clone(),
+            Outbound::for_tests(),
+            settings,
+            None,
+            None,
+            Arc::new(policy),
+            Arc::new(SceneResolver::new(pool.clone())),
+            Arc::new(catalyst::comms::presence::Presence::new()),
+            Arc::new(catalyst::comms::interfaces::test_support::StubDirectory::default()),
+        ));
+        axum::Router::new()
+            .nest("/comms-gatekeeper", router(state))
+            .layer(social_writes_on())
+    }
+
+    /// The refusal of a streamer token request with `key`, and whether the
+    /// key is active after it.
+    async fn token_refusal(
+        app: &axum::Router,
+        pool: &sqlx::PgPool,
+        key: &str,
+    ) -> (StatusCode, String, bool) {
+        let body = serde_json::json!({ "token": key, "identity": "streamer" });
+        let request = Request::post("/comms-gatekeeper/cast/streamer-token")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()));
+        let response = app.clone().oneshot(request.unwrap()).await.unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await;
+        let body: Value = serde_json::from_slice(&body.unwrap()).unwrap_or_default();
+        let active = "SELECT active FROM social.scene_stream_access WHERE streaming_key = $1";
+        let active = sqlx::query_scalar(active).bind(key);
+        let active = active.fetch_one(pool).await.unwrap();
+        (
+            status,
+            body["error"].as_str().unwrap_or_default().into(),
+            active,
+        )
+    }
+
+    /// A key ends on evidence that its minter lost the place. A node with no
+    /// names reader, and a LAND index that is not ready with no marketplace
+    /// reader, refuse every owner: the key of the owner stays and mints
+    /// nothing. When the source names another owner, the key ends.
+    #[tokio::test]
+    async fn a_key_stays_while_no_source_names_the_owner_of_its_place() {
+        use catalyst::chain_index::graph::test_support::{Names, index_reading};
+        use catalyst::comms::rooms::{gatekeeper_scene_room, worlds_service_scene_room};
+        use catalyst::comms::world_identity::{Parcel, ParcelSet, SceneId, WorldName};
+        use catalyst::worlds::core::store::{self, SceneDeployment};
+        use serde_json::json;
+        const LINK: &str = "/cast/generate-stream-link";
+        const NO_SOURCE: &str = "No source names the owner of this place now";
+        const INVALID: &str = "Invalid or expired streaming token";
+
+        let Some(pool) = catalyst::db::scratch::pool(4).await else {
+            return;
+        };
+        let owner_key = random_key();
+        let owner = Address::parse(&address_of(&owner_key)).unwrap();
+        let buyer = Address::parse(&address_of(&random_key())).unwrap();
+        let policy = |market| Policy::new(pool.clone(), PersonalWorldsPolicy::disabled(), market);
+        // Each ingress stub names its first key alike: the key of `room` gets a name of its own.
+        let own_key = async |room: String| {
+            let key = format!("sk_{}", Uuid::new_v4().simple());
+            let rename = "UPDATE social.scene_stream_access SET streaming_key = $2 WHERE room_id = $1 AND active";
+            let rename = sqlx::query(rename).bind(room).bind(&key);
+            assert_eq!(rename.execute(&pool).await.unwrap().rows_affected(), 1);
+            key
+        };
+        let place = "INSERT INTO explore.place (id, base_position, raw) VALUES ($1, $2, $3::jsonb)";
+
+        // A NAME world: the names reader names its owner.
+        let tag = Uuid::new_v4().simple().to_string()[..10].to_string();
+        let label = format!("unsourced{tag}");
+        let names = Names::default();
+        names.set(&owner, &label);
+        let world = WorldName::parse(&format!("{label}.dcl.eth")).unwrap();
+        let dir = std::env::temp_dir().join(format!("catalyst-gk-unsourced-{tag}"));
+        let storage = catalyst::storage::Storage::from_config(&dir).await.unwrap();
+        let parcels: ParcelSet = [Parcel::parse("0,0").unwrap()].into_iter().collect();
+        sqlx::query(place)
+            .bind(Uuid::new_v4().to_string())
+            .bind("0,0")
+            .bind(json!({ "world": true, "world_name": world.display(), "positions": ["0,0"] }))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let scene_id = format!("Unsourced{tag}");
+        let scene = json!({ "base": "0,0", "parcels": ["0,0"] });
+        let entity = json!({ "type": "scene", "timestamp": 1000, "pointers": ["0,0"], "metadata": { "scene": scene } });
+        let deployment = SceneDeployment {
+            world: &world,
+            name_owner: Some(&owner),
+            entity_id: &scene_id,
+            deployer: &owner,
+            deployment_auth_chain: &json!([{ "type": "SIGNER", "payload": owner.as_str() }]),
+            entity: &entity,
+            parcels: &parcels,
+            size: 1,
+            replacement: &catalyst::worlds::policy::Deploy::Owner,
+            forward_to: None,
+            quota: None,
+        };
+        store::deploy_scene(&pool, &storage, deployment)
+            .await
+            .unwrap();
+        let realm =
+            json!({ "hostname": "node.example", "protocol": "v3", "serverName": world.display() });
+        let metadata =
+            json!({ "signer": SCENE_SIGNER, "sceneId": scene_id, "parcel": "0,0", "realm": realm })
+                .to_string();
+        let named = app_over(&pool, policy(Some(index_reading(names.clone())))).await;
+        let linked = call_at(&named, &owner_key, "GET", LINK, &metadata).await;
+        assert_eq!(linked.0, StatusCode::OK, "{}", linked.1);
+        let room = worlds_service_scene_room(&world, &SceneId::parse(&scene_id).unwrap());
+        let key = &own_key(room).await;
+        let unsourced = (StatusCode::SERVICE_UNAVAILABLE, NO_SOURCE.to_owned(), true);
+        let revoked = (StatusCode::UNAUTHORIZED, INVALID.to_owned(), false);
+        let unnamed = app_over(&pool, policy(None)).await;
+        let kept = token_refusal(&unnamed, &pool, key).await;
+        assert_eq!(kept, unsourced, "no names reader");
+        names.transfer(&buyer, &label);
+        let sold = app_over(&pool, policy(Some(index_reading(names)))).await;
+        let ended = token_refusal(&sold, &pool, key).await;
+        assert_eq!(ended, revoked, "the NAME has another holder");
+
+        // A Genesis scene: the marketplace reader names the owner of its parcel.
+        let token = Uuid::new_v4().as_u128();
+        let (x, y) = (
+            (token % 301) as i32 - 150,
+            ((token >> 64) % 301) as i32 - 150,
+        );
+        let parcel = format!("{x},{y}");
+        sqlx::query(place)
+            .bind(Uuid::new_v4().to_string())
+            .bind(&parcel)
+            .bind(json!({ "world": false, "positions": [parcel] }))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let scene_id = format!("bafkreiunsourced{}", Uuid::new_v4().simple());
+        deploy_scene(&pool, &scene_id, &parcel).await;
+        let realm = json!({ "serverName": "main" });
+        let metadata = json!({ "signer": SCENE_SIGNER, "realmName": "main", "realm": realm, "parcel": parcel, "sceneId": scene_id }).to_string();
+        let land_of = async |holder: &Address| {
+            let land = json!([{ "id": "0xland", "searchParcelX": x.to_string(), "searchParcelY": y.to_string(), "owner": { "id": holder.as_str() }, "parcel": { "estate": null } }]);
+            let settings = catalyst::chain_index::IndexSettings {
+                marketplace_subgraph_url: Some(
+                    super::tests::fake_land_subgraph(land, Arc::default()).await,
+                ),
+                ..catalyst::chain_index::IndexSettings::for_tests()
+            };
+            let market = catalyst::chain_index::ChainIndex::new(Outbound::for_tests(), settings);
+            market.allow_loopback_for_tests();
+            Some(Arc::new(market))
+        };
+        let owned = app_over(&pool, policy(land_of(&owner).await)).await;
+        let linked = call_at(&owned, &owner_key, "GET", LINK, &metadata).await;
+        assert_eq!(linked.0, StatusCode::OK, "{}", linked.1);
+        let key = &own_key(gatekeeper_scene_room("main", &scene_id)).await;
+        // An index of registries that no cursor row publishes.
+        let index = catalyst::land_authz::LandAuthzState::new(
+            pool.clone(),
+            Outbound::for_tests(),
+            catalyst::land_authz::Settings {
+                land_registry: address_of(&random_key()),
+                ..catalyst::land_authz::Settings::for_tests()
+            },
+            None,
+        );
+        let unready = policy(None).with_land_authz(Some(Arc::new(index)));
+        let kept = token_refusal(&app_over(&pool, unready).await, &pool, key).await;
+        assert_eq!(kept, unsourced, "a LAND index that is not ready, no reader");
+        let sold = app_over(&pool, policy(land_of(&buyer).await)).await;
+        let ended = token_refusal(&sold, &pool, key).await;
+        assert_eq!(ended, revoked, "the LAND has another owner");
     }
 }
 

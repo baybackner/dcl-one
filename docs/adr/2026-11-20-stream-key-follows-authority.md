@@ -17,7 +17,7 @@ A key lives only while the wallet that generated it would still get it, for the 
 - The check runs on each publisher token and each stream link, before `GET /scene-stream-access` answers, after `DELETE /scene-admin`, after a platform ban or an operator block, on a database notification ([stream key notifications](2026-11-20-stream-key-notifications.md)) and in a recheck job of its own (`comms-streaming-key-recheck`), apart from the job that expires keys.
 - A key that fails the check is revoked like any other: one conditional update of the row, then the cleanup deletes the ingress, removes the publishers and tells the owner. The cleanup runs in a task of its own, so no request waits for LiveKit; a cleanup job tries a failed one again. The join guard refuses a publisher of a revoked key.
 - The removal of a place ends its key in the removal's own transaction and sends no key notice.
-- A source that cannot be read keeps the key and refuses the token.
+- A source that cannot be read keeps the key and refuses the token. The same applies while no source can name the owner of the place: a LAND index that is not ready on a node with no marketplace reader, or a NAME world on a node with no names reader. Such a node refuses every owner, so a refusal there is no evidence that the minter lost the place.
 
 ## Alternatives
 

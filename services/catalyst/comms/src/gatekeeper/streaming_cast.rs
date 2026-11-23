@@ -224,17 +224,19 @@ async fn publishing_access(
 /// be given the key (the gates of [`generate_stream_link`] on the scene of the
 /// credential's room), or that scene no longer stands there
 /// ([`still_deployed`]). An authority that cannot be read is an error, never
-/// a loss. A key with no recorded minter (an imported one) ends with its
-/// scene or at its expiry.
+/// a loss, and so is a refusal while no source names the owner of the place
+/// (a LAND index that is not ready, no names reader): a request is refused
+/// without that evidence, and a key is not revoked without it. A key with no
+/// recorded minter (an imported one) ends with its scene or at its expiry.
 async fn key_ends(
     state: &CommsState,
     access: &KeyedAccess,
 ) -> Result<Option<&'static str>, ApiError> {
     let minter = Address::parse(&access.generated_by).ok();
     if let Some(minter) = &minter
-        && let Some(why) = super::barred(state, minter, None).await?
+        && let Some(barred) = super::barred(state, minter, None).await?
     {
-        return Ok(Some(why));
+        return Ok(Some(barred.why()));
     }
     let room = access.room_id.as_deref().unwrap_or_default();
     let resolved = room_scene(state, room).await?;
@@ -252,12 +254,22 @@ async fn key_ends(
     let world = resolved.as_ref().and_then(|room| room.realm.world());
     let world_scene = world.map(|_| scene.admin_key().to_owned());
     let authority = super::key_authority(state, &access.place_id, world, scene);
+    // Read before and after the decision: a source that comes or goes between
+    // the two reads is no evidence.
+    let sourced = scene::owner_source_ready(state, &authority).await;
     match super::key_decision(state, &authority, world_scene.as_deref(), &minter).await {
         PermissionDecision::Allowed => Ok(None),
-        decision if super::lacks_authority(&decision) => Ok(Some("its minter lost the place")),
+        decision if super::lacks_authority(&decision) => {
+            if sourced && scene::owner_source_ready(state, &authority).await {
+                Ok(Some("its minter lost the place"))
+            } else {
+                Err(service_unavailable(NO_OWNER_SOURCE_MSG))
+            }
+        }
         PermissionDecision::Refused(why) => Err(why.into()),
     }
 }
+const NO_OWNER_SOURCE_MSG: &str = "No source names the owner of this place now";
 
 /// Whether the scene of a credential's `room` is the one deployed now on its
 /// base parcel, as a stream link binds it ([`Context::resolve`]). A redeploy
@@ -333,6 +345,19 @@ async fn keep_or_revoke(state: &SharedState, access: &KeyedAccess) -> Result<boo
     Err(super::concurrent_change())
 }
 
+/// Whether the active key of `place_id` ends now ([`key_ends`]), with no
+/// write: what a `GET` asks while the social writes switch is off. A key that
+/// cannot be read or decided stays, as in [`recheck_keys`].
+pub(crate) async fn place_key_ends(state: &CommsState, place_id: &str) -> bool {
+    let key = "SELECT id, place_id, room_id, generated_by, created_at, expiration_time \
+               FROM social.scene_stream_access WHERE active AND place_id = $1";
+    let key = sqlx::query_as::<_, KeyedAccess>(key).bind(place_id);
+    match key.fetch_optional(&state.pool).await {
+        Ok(Some(access)) => matches!(key_ends(state, &access).await, Ok(Some(_))),
+        _ => false,
+    }
+}
+
 /// The active credentials a recheck reads.
 #[derive(Clone, Copy)]
 pub(crate) enum Keys<'a> {
@@ -354,17 +379,33 @@ pub(crate) enum Keys<'a> {
     World(&'a str),
 }
 
-/// [`keep_or_revoke`] on each credential `keys` selects; one that cannot be
-/// decided keeps its key for the next recheck.
+/// The keys one periodic pass reads ([`Keys::After`]).
+const RECHECK_PAGE: usize = 20;
+
+/// [`try_recheck_keys`] for a request, which does not wait for the next
+/// recheck: keys that cannot be read stay.
 pub(crate) async fn recheck_keys(state: &SharedState, keys: Keys<'_>) {
-    let after;
+    if let Err(error) = try_recheck_keys(state, keys).await {
+        tracing::warn!(%error, "stream keys not read for a recheck");
+    }
+}
+
+/// [`keep_or_revoke`] on each credential `keys` selects; one that cannot be
+/// decided keeps its key for the next recheck. The error is that of the read
+/// of the keys.
+pub(crate) async fn try_recheck_keys(
+    state: &SharedState,
+    keys: Keys<'_>,
+) -> Result<(), sqlx::Error> {
+    let (after, page);
     let (filter, value) = match keys {
         Keys::Room(room) => ("room_id = $1", room),
         Keys::Minter(wallet) => ("lower(generated_by) = $1", wallet),
         Keys::Place(place) => ("place_id = $1", place),
         Keys::After(cursor) => {
             after = cursor.lock().unwrap().clone();
-            ("place_id > $1 ORDER BY place_id LIMIT 20", after.as_str())
+            page = format!("place_id > $1 ORDER BY place_id LIMIT {RECHECK_PAGE}");
+            (page.as_str(), after.as_str())
         }
         Keys::All => ("place_id > $1", ""),
         Keys::Replaced(entity) => (
@@ -375,17 +416,13 @@ pub(crate) async fn recheck_keys(state: &SharedState, keys: Keys<'_>) {
         ),
         Keys::World(rooms) => ("starts_with(room_id, $1)", rooms),
     };
-    let rows: Vec<KeyedAccess> = match sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let rows: Vec<KeyedAccess> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id, place_id, room_id, generated_by, created_at, expiration_time \
          FROM social.scene_stream_access WHERE active AND {filter}"
     )))
     .bind(value)
     .fetch_all(&state.pool)
-    .await
-    {
-        Ok(rows) => rows,
-        Err(error) => return tracing::warn!(%error, "stream keys not read for a recheck"),
-    };
+    .await?;
     for access in &rows {
         if let Keys::After(cursor) = keys {
             cursor.lock().unwrap().clone_from(&access.place_id);
@@ -395,10 +432,11 @@ pub(crate) async fn recheck_keys(state: &SharedState, keys: Keys<'_>) {
         }
     }
     if let Keys::After(cursor) = keys
-        && rows.len() < 20
+        && rows.len() < RECHECK_PAGE
     {
         cursor.lock().unwrap().clear();
     }
+    Ok(())
 }
 
 /// The check a notification asks for, `wake` being its payload: `scene:<entity
@@ -448,7 +486,9 @@ pub(crate) async fn listen<F: Future<Output = ()>>(pool: &PgPool, check: impl Fn
                             let Some(message) = message? else {
                                 return Ok(());
                             };
-                            if let Some(("scene" | "world", _)) = message.payload().split_once(':')
+                            let kind = message.payload().split_once(':').map(|(kind, _)| kind);
+                            if let ("new_deployment", Some("scene"))
+                            | ("world_authority", Some("world")) = (message.channel(), kind)
                             {
                                 wake(message.payload());
                             }

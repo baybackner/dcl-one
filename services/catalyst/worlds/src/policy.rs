@@ -1432,6 +1432,22 @@ impl Policy {
         }
     }
 
+    /// Whether a source can name the owner now: of `world`, or of Genesis
+    /// LAND for `None`. Without one [`Self::is_admin`] refuses every owner
+    /// (fail-closed), so that refusal is no evidence that an owner lost the
+    /// place.
+    pub async fn owner_source_ready(&self, world: Option<&WorldName>) -> bool {
+        match (world, &self.land_authz) {
+            (Some(world), _) => {
+                !self.ownable(world)
+                    || self.personal_worlds.owner_of(world).is_some()
+                    || self.has_live_authority(world)
+            }
+            (None, Some(land)) => land.has_source().await,
+            (None, None) => self.marketplace.is_some(),
+        }
+    }
+
     /// LAND ownership at any of `coords`, directly or through the estate.
     async fn owns_land_at(&self, coords: &[(i32, i32)], actor: &Address) -> PermissionDecision {
         if coords.is_empty() {
@@ -1626,6 +1642,10 @@ impl crate::comms::interfaces::AccessPolicy for Policy {
 
     async fn is_admin(&self, scene: &SceneRef<'_>, actor: &Address) -> PermissionDecision {
         Policy::is_admin(self, scene, actor).await
+    }
+
+    async fn owner_source_ready(&self, world: Option<&WorldName>) -> bool {
+        Policy::owner_source_ready(self, world).await
     }
 
     async fn protected_addresses(

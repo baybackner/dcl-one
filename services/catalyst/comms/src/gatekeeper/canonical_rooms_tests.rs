@@ -1107,6 +1107,7 @@ async fn canonical_stream_route_creates_and_persists_ingress_for_the_joined_scen
             State(state.clone()),
             at("/scene-stream-access"),
             axum::http::Method::POST,
+            None,
             signed(KEY, "post", "/scene-stream-access", &metadata.to_string()).await,
         )
         .await
@@ -1136,6 +1137,7 @@ async fn canonical_stream_route_creates_and_persists_ingress_for_the_joined_scen
         State(state.clone()),
         at("/scene-stream-access"),
         axum::http::Method::POST,
+        None,
         signed(KEY, "post", "/scene-stream-access", &foreign.to_string()).await,
     )
     .await

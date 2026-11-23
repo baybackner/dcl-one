@@ -32,7 +32,10 @@
 //!   different slides.
 //! - A bot whose process ended without leaving is removed from its room at
 //!   once, after the node sends `presentation:stopped` in its place.
-//!   Upstream leaves it to LiveKit, which keeps it about 20 s.
+//!   Upstream leaves it to LiveKit, which keeps it about 20 s. A bot that
+//!   LiveKit disconnected is out of its room: the node sends nothing and
+//!   removes nobody. When another node started the same token, that node's
+//!   bot has the identity and its presentation goes on.
 //! - The bot then connects with the token before any rendering; a token
 //!   LiveKit refuses answers 401 on the JSON path (checked before the
 //!   download; 503 when the bot or LiveKit is unavailable) and 500 on the

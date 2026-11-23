@@ -2639,9 +2639,17 @@ Invariants:
   removal (`added_at`; a cleanup that runs late keeps the later ones): those
   on the places of the active scenes of a world (`explore.world_scene_place`
   by `world_name` on `world_scene_place_deployment_idx`; the id of a world
-  place is the world name or an imported id, never the key of a grant), or
-  those on the base parcel of a Genesis place when no enabled `explore.place`
-  row (`world`, `disabled`, `base_position`) has that base. A retired
+  place is the world name or an imported id, never the key of a grant) when
+  no enabled world row of that name remains in `explore.place_world_local`
+  or `explore.place` (`world`, `disabled`, `lower(world_name)` on
+  `place_world_local_world_name_col_idx` and `place_world_name_col_idx`: the
+  local row of a world displaces its mirrored row, and the world stands), or
+  those on the effective base parcel of a Genesis place (the resolver's
+  `ParcelSet::effective_base` of the positions and the declared base in the
+  removal row) when no enabled `explore.place` row (`world`, `disabled`) has
+  that effective base: the rows that hold the parcel (`raw->'positions'` on
+  `place_positions_path_gin`), each compared by `social.scene_base_parcel` of
+  its positions and `base_position`. A retired
   world-scene identity is not bound to a deployment again, so no request
   reads its grants.
 - The release script `schemas/releases/scene-admin-place-keys.sql` moves the
@@ -2665,9 +2673,9 @@ Invariants:
   that window no request reads them and they stay (tens of rows at most).
 - `social.scene_base_parcel(parcels, declared_base)` is the one SQL copy of
   the effective base parcel that the room resolver computes
-  (`ParcelSet::effective_base`). The release script and the import loads of
-  scene admins and scene bans call it; `the_sql_base_parcel_is_the_resolvers`
-  compares the two.
+  (`ParcelSet::effective_base`). The release script, the import loads of
+  scene admins and scene bans and the place removal cleanup call it;
+  `the_sql_base_parcel_is_the_resolvers` compares the two.
 
 ## Scene bans
 
@@ -2696,8 +2704,10 @@ Invariants:
 - The cleanup of a removed place deletes the bans made before the removal
   (`banned_at`), in the transaction that revokes its admin grants: the rows on
   the place id, the `<world>:<base>` rows of the world (any base, so replaced
-  scenes too), or the rows on the base parcel of a Genesis place when no
-  enabled `explore.place` row has that base.
+  scenes too) when no enabled world row of that name remains (the same two
+  probes as for the grants), or the rows on the effective base parcel of a
+  Genesis place when no enabled `explore.place` row has that effective base
+  (the same key and probe as for the grants).
 - The release script `schemas/releases/genesis-scene-ban-keys.sql` moves the
   bans of Genesis deployments that are not deleted (`deleter_deployment IS
   NULL`, as the resolver reads them, unpublished ones too) from the entity id
@@ -2753,7 +2763,10 @@ place (`split_part(room_id, ':', 3)` or `starts_with(room_id, ...)` over the
 active rows, hundreds at most) and one authority decision for each key found,
 usually none. The check of every key at a subscription is one authority
 decision for each active key: a LAND or NAME read, or a world permission
-read, each bounded by its own timeout.
+read, each bounded by its own timeout. A refusal ends a key only while a
+source names the owner of the place: for a Genesis key the check reads the
+LAND index cursor (`land_authz.index_cursor`, one row) before the decision
+and again after a refusal; for a world it reads no row.
 
 Invariants:
 
@@ -2776,6 +2789,16 @@ Not announced: a LAND owner or operator change, a NAME transfer until the
 owner reconcile writes `worlds.worlds.owner`, a ban. The key job and the check
 on each use cover them. A scene admin removal checks the key in its own
 request.
+
+Social writes switch: with `SOCIAL_WRITES_ENABLED` off the social gate refuses
+each `POST`, `PUT` and `DELETE` of the gatekeeper, the publisher tokens
+included. `GET /scene-stream-access` then writes nothing: a key that ends is
+not revoked, and the answer is that of a place with no key. `GET
+/cast/generate-stream-link` does not read the switch: it mints a key, and
+checks the key of the place before, as with the switch on. The gatekeeper
+jobs do not read the switch either: the key job, the listener, the expiry of
+keys, the stream state reconciliation, the cleanup and the place removal
+cleanup write in the process that holds each lease.
 
 ## Stream state reconciliation
 
