@@ -4,13 +4,12 @@ import { renderToString } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router";
 
-import SitesChrome from "@ui/web/frames/SitesChrome";
 import SitesLayout from "./SitesLayout";
 import SiteLayout from "@dcl/one-ui/components/AppChrome/SiteLayout";
-import DclTopBar from "@ui/web/frames/DclTopBar";
 import ChromeLink from "@dcl/one-ui/components/AppChrome/ChromeLink";
-import { useChromeNav } from "@dcl/one-ui/components/AppChrome/chrome-nav";
+import { useChromeNav, type ChromeTopBarProps } from "@dcl/one-ui/components/AppChrome/chrome-nav";
 import ChromeNavBridge, { chromeHrefTarget, upstreamShopPath } from "./ChromeNavBridge";
+import SitesTopBar from "./SitesTopBar";
 
 const ORIGIN = "https://example.org";
 
@@ -66,6 +65,12 @@ function Probe() {
   return <span>{useChromeNav().navigate ? "bridged" : "plain"}</span>;
 }
 
+// A page that keeps its own top bar (Social) renders whatever the chrome puts in the TopBar slot.
+function SlotTopBar(props: ChromeTopBarProps) {
+  const { TopBar } = useChromeNav();
+  return TopBar ? <TopBar {...props} /> : <span>no top bar</span>;
+}
+
 describe("ChromeNavBridge", () => {
   it("discovers application card links while keeping documents, downloads and fragments native", () => {
     const html = renderToString(<MemoryRouter><ChromeNavBridge>
@@ -81,12 +86,12 @@ describe("ChromeNavBridge", () => {
     for (const anchor of anchors.slice(1)) expect(anchor).not.toContain("data-discover");
   });
 
-  it("provides the chrome navigator so the top bar renders discoverable in-app links", () => {
+  it("fills the TopBar slot with the Sites top bar, which renders discoverable in-app links", () => {
     const html = renderToString(
       <MemoryRouter initialEntries={["/blog"]}>
         <QueryClientProvider client={new QueryClient()}><ChromeNavBridge>
           <Probe />
-          <DclTopBar variant="sites" active="learn" signedIn={false} />
+          <SlotTopBar variant="sites" active="learn" signedIn={false} />
         </ChromeNavBridge></QueryClientProvider>
       </MemoryRouter>,
     );
@@ -96,7 +101,11 @@ describe("ChromeNavBridge", () => {
   });
 
   it("renders plain anchors without the bridge", () => {
-    const html = renderToString(<DclTopBar variant="sites" active="shop" signedIn={false} />);
+    const html = renderToString(
+      <MemoryRouter initialEntries={["/shop"]}>
+        <QueryClientProvider client={new QueryClient()}><SitesTopBar active="shop" signedIn={false} /></QueryClientProvider>
+      </MemoryRouter>,
+    );
     expect(html).not.toContain("data-discover");
     expect(html).toContain('href="/shop/overview"');
   });
@@ -126,6 +135,6 @@ it("keeps a legacy overlay flag in flow unless the native header surface is expl
   // The bar's landing look comes from the path, as decentraland.org's Layout derives it: bare while signed out.
   expect(home).toContain('data-landing="true"');
   expect(home).toContain('data-bare="true"');
-  const fallback = renderToString(<SitesChrome active="play" overlayNav headerSurface="overlay">Hero</SitesChrome>);
+  const fallback = renderToString(<QueryClientProvider client={new QueryClient()}><MemoryRouter><SitesLayout active="play" overlayNav headerSurface="overlay">Hero</SitesLayout></MemoryRouter></QueryClientProvider>);
   expect(fallback).not.toContain('data-header-overlay');
 });
