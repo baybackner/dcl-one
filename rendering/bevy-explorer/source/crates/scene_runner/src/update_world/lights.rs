@@ -385,7 +385,7 @@ const SUNSET: f32 = 18.828;
 
 /// Unity's moonrise and moonset (hours): the moon is up for six and a half hours around 00:45.
 pub const MOONRISE: f32 = 21.504;
-pub const MOONSET: f32 = 4.008;
+const MOONSET: f32 = 4.008;
 
 /// Unity's moon arc leans this far from the zenith, so the moon stays low for long shadows.
 const MOON_TILT_DEGREES: f32 = 40.0;
@@ -411,7 +411,7 @@ fn celestial_direction(hours: f32, rise: f32, set: f32, tilt_degrees: f32) -> Ve
 
 /// Direction the sunlight travels at `hours` past midnight: straight over the zenith in a
 /// vertical plane diagonal to the parcel grid.
-pub fn sun_direction(hours: f32) -> Vec3 {
+fn sun_direction(hours: f32) -> Vec3 {
     celestial_direction(hours, SUNRISE, SUNSET, 0.0)
 }
 
@@ -422,8 +422,8 @@ pub fn moon_direction(hours: f32) -> Vec3 {
 }
 
 /// How far a body is along its circle at `day_fraction`: 0 at moonrise to 1 at moonset above the
-/// horizon, then 1 to 2 below it until the next moonrise. Unity's
-/// `SkyboxCelestialMath.CelestialProgress` for the moon.
+/// horizon, then 1 to 2 below it until the next moonrise. The moon's disc and colour ramp follow
+/// it, so they track the moon's own arc rather than the time of day.
 pub fn moon_progress(day_fraction: f32) -> f32 {
     const MIN_ARC_FRACTION: f32 = 1e-4;
     let (rise, set) = (MOONRISE / 24.0, MOONSET / 24.0);

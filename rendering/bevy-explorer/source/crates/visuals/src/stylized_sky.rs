@@ -1,18 +1,19 @@
-//! The sky: Unity's stylized skybox (the StylizedV1 preset), drawn into the atmosphere cube by
+//! The sky: the stylized skybox preset, drawn into the atmosphere cube by
 //! `shaders/stylized_sky.wgsl`. The sky colour is a lookup by day phase and elevation, baked
 //! from the preset's four gradients (`sky_preset::bake_sky_lut`); a scene's own sky colours
 //! blend over it. The sun or the moon is a disc in a halo on that sky, and three cloud strips
 //! wrap the dome over them; the cube's alpha is how much the clouds hide.
 //!
-//! The authored colours go to the shader as Unity's sky shader receives them: the lookup and the
-//! cloud colours as authored, the disc colour linearised as `Material.SetColor` does. The shader
-//! decodes its result from sRGB to linear, as GenesisSky's last step does.
+//! The authored colours go to the shader in the space the preset was tuned in: the lookup and
+//! the cloud colours as authored (sRGB values), the disc colour linearised as a material colour
+//! (`gamma_to_linear`). The shader composites on those values and decodes its result from sRGB to
+//! linear as its last step.
 //!
 //! The screen shows the sky per pixel through `StylizedSkyMaterial`, which takes the place of
-//! bevy_atmosphere's skybox material, as Unity samples its skybox per pixel: the cube's texels
-//! are too coarse for the cloud strips' detail. The compute model draws the same sky into the
-//! atmosphere cube for the reflections, the ambient and the star pass. Both are written
-//! unscaled, so they are in the units of Unity's sky output.
+//! bevy_atmosphere's skybox material: the cube's texels are too coarse for the cloud strips'
+//! detail. The compute model draws the same sky into the atmosphere cube for the reflections,
+//! the ambient and the star pass. Both are written unscaled, in the units the preset's light and
+//! exposure values are tuned for.
 
 use bevy::{
     image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
@@ -227,8 +228,8 @@ impl From<&StylizedSky> for StylizedSkyUniform {
     }
 }
 
-/// Where a cloud strip is read for a direction: Unity's `CloudsV2_Uv`, with U in repeats of
-/// the strip and V up the image. `v_dome` runs from 0 at the zenith to 1 at the dome's rim,
+/// Where a cloud strip is read for a direction, with U in repeats of the strip and V up the
+/// image. `v_dome` runs from 0 at the zenith to 1 at the dome's rim,
 /// 113.6 degrees below it. The shader does the same; this copy is what the tests check.
 #[cfg(test)]
 pub fn cloud_uv(
@@ -279,8 +280,8 @@ pub struct DiscParams {
     pub halo: Vec2,
 }
 
-/// The disc at `day_fraction`: Unity's `UpdateCelestialPath` and `UpdateDirectionalLight`. The
-/// moon is the body once the light has swung past halfway onto its arc, and the disc is hidden
+/// The disc at `day_fraction`, following the directional light along its path. The moon is the
+/// body once the light has swung past halfway onto its arc, and the disc is hidden
 /// mid-swing. A direction a scene gives the sun (`scene_direction`) keeps the sun's whole disc
 /// there all night.
 pub fn disc_params(day_fraction: f32, scene_direction: bool) -> DiscParams {
@@ -303,9 +304,9 @@ pub fn disc_params(day_fraction: f32, scene_direction: bool) -> DiscParams {
     }
 }
 
-/// Unity's `Mathf.GammaToLinearSpace` (exact form), which `Material.SetColor` applies to a colour
-/// in a linear project: the sRGB curve below 1, a 2.2 power from 1 up.
-pub fn unity_gamma_to_linear(colour: Vec3) -> Vec3 {
+/// A material colour to linear, as the preset's disc ramps are authored for: the sRGB curve below
+/// 1, a 2.2 power from 1 up, where the ramps' bright keys sit.
+pub fn gamma_to_linear(colour: Vec3) -> Vec3 {
     let channel = |value: f32| {
         if value <= 0.04045 {
             value / 12.92
@@ -318,10 +319,10 @@ pub fn unity_gamma_to_linear(colour: Vec3) -> Vec3 {
     Vec3::new(channel(colour.x), channel(colour.y), channel(colour.z))
 }
 
-/// Shader Graph's Colorspace Conversion node, RGB to Linear, the sky shader's last step: the
-/// sRGB curve, continued past 1 on its power branch.
+/// The sky shader's last step, sRGB to linear: the sRGB curve, continued past 1 on its power
+/// branch.
 #[cfg(test)]
-pub fn shader_graph_rgb_to_linear(colour: Vec3) -> Vec3 {
+pub fn sky_rgb_to_linear(colour: Vec3) -> Vec3 {
     let channel = |value: f32| {
         if value <= 0.04045 {
             value / 12.92
@@ -336,11 +337,11 @@ pub fn shader_graph_rgb_to_linear(colour: Vec3) -> Vec3 {
 }
 
 /// The colour of the disc and its halo at `day_fraction`: the moon's ramp along its rise to set
-/// while it is the body, or the sun's ramp at the phase (Unity's `DiscColor`), linearised as
-/// Unity's `Material.SetColor` does before the sky shader decodes it again. A scene's sun
+/// while it is the body, or the sun's ramp at the phase, linearised as a material colour
+/// (`gamma_to_linear`) before the sky shader decodes it again. A scene's sun
 /// colour tints it: its hue at that preset's brightness, times its own brightness above 1.
 pub fn disc_color(disc: &DiscParams, day_fraction: f32, scene: Option<Vec3>) -> Vec3 {
-    let preset = unity_gamma_to_linear(if disc.moon_active {
+    let preset = gamma_to_linear(if disc.moon_active {
         sample_ramp(
             &MOON_COLOR_RAMP,
             moon_progress(day_fraction).clamp(0.0, 1.0),
@@ -624,8 +625,8 @@ fn update_sky_material(
 }
 
 /// The sky lookup as the shader samples it: `SKY_LUT_WIDTH` by `SKY_LUT_ROWS`, blending
-/// between elevations and between neighbouring phases, and holding its edges. Half floats, as
-/// Unity's, which every device filters.
+/// between elevations and between neighbouring phases, and holding its edges. Half floats,
+/// which every device filters.
 pub fn sky_lut_image() -> Image {
     let mut image = Image::new(
         Extent3d {
@@ -666,7 +667,7 @@ pub fn load_horizon_noise(asset_server: &AssetServer) -> Handle<Image> {
 #[derive(Resource)]
 pub struct CloudStrips([Handle<Image>; 3]);
 
-/// The strips as Unity ships them: data, not colour, each wide image one turn of the sky. They
+/// The strips as authored: data, not colour, each wide image one turn of the sky. They
 /// stay off the GPU; `stack_cloud_strips` makes the texture the shader reads.
 pub fn load_cloud_strips(asset_server: &AssetServer) -> CloudStrips {
     CloudStrips(CLOUD_STRIP_PATHS.map(|path| {
@@ -890,21 +891,20 @@ mod tests {
     const CENTRE: usize = SIZE / 2;
 
     #[test]
-    fn unity_colour_conversions() {
+    fn colour_conversions() {
         let close = |a: Vec3, b: Vec3| a.abs_diff_eq(b, 1e-5);
-        // Shader Graph's Colorspace Conversion node, RGB to Linear: the sRGB curve, continued
-        // past 1 on its power branch
+        // the sky's last step: the sRGB curve, continued past 1 on its power branch
         assert!(close(
-            shader_graph_rgb_to_linear(Vec3::new(0.02, 0.5, 2.0)),
+            sky_rgb_to_linear(Vec3::new(0.02, 0.5, 2.0)),
             Vec3::new(
                 0.02 / 12.92,
                 ((0.5f32 + 0.055) / 1.055).powf(2.4),
                 ((2.0f32 + 0.055) / 1.055).powf(2.4)
             )
         ));
-        // Mathf.GammaToLinearSpace, which Material.SetColor applies: a 2.2 power from 1 up
+        // a material colour: a 2.2 power from 1 up
         assert!(close(
-            unity_gamma_to_linear(Vec3::new(0.02, 0.5, 2.0)),
+            gamma_to_linear(Vec3::new(0.02, 0.5, 2.0)),
             Vec3::new(
                 0.02 / 12.92,
                 ((0.5f32 + 0.055) / 1.055).powf(2.4),
@@ -1079,17 +1079,17 @@ mod tests {
 
     #[test]
     fn disc_colour_is_the_active_body_or_the_scene() {
-        // the ramp as Unity's Material.SetColor hands it to the sky shader
+        // the ramp linearised as a material colour, as the sky shader receives it
         let midnight = day_fraction(0.0);
         let moon = disc_params(midnight, false);
         assert_eq!(
             disc_color(&moon, midnight, None),
-            unity_gamma_to_linear(sample_ramp(&MOON_COLOR_RAMP, moon_progress(midnight)))
+            gamma_to_linear(sample_ramp(&MOON_COLOR_RAMP, moon_progress(midnight)))
         );
         let sun = disc_params(0.5, false);
         assert_eq!(
             disc_color(&sun, 0.5, None),
-            unity_gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5)))
+            gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.5)))
         );
         // a scene's sun colour tints the disc: its hue at the active body's preset brightness,
         // times the authored brightness above 1
@@ -1158,7 +1158,7 @@ mod tests {
             |colour: [f32; 4]| 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
         // the lookup holds sRGB-encoded values, which the sky decodes as its last step
         let decode = |colour: [f32; 4]| {
-            let linear = shader_graph_rgb_to_linear(Vec3::new(colour[0], colour[1], colour[2]));
+            let linear = sky_rgb_to_linear(Vec3::new(colour[0], colour[1], colour[2]));
             [linear.x, linear.y, linear.z, colour[3]]
         };
         let mut app = sky_test_app(SIZE as u32);

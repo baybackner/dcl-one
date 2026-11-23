@@ -283,7 +283,8 @@ pub const SKY_LUT_WIDTH: usize = 256;
 pub const SKY_LUT_ROWS: usize = 5;
 
 /// The sky lookup: rows night, sunrise, day, sunset, night; texel `x` is the row's gradient at
-/// `x / 255`. Unity's `SkyboxLookPresetEditor.BakeSkyLut`, row-major, alpha 1.
+/// `x / 255`, row-major, alpha 1: the preset's gradients baked as its editor bakes them, so the
+/// shader samples the same texels.
 pub fn bake_sky_lut() -> Vec<[f32; 4]> {
     let rows: [&[(f32, Vec3)]; SKY_LUT_ROWS] =
         [&SKY_NIGHT, &SKY_SUNRISE, &SKY_DAY, &SKY_SUNSET, &SKY_NIGHT];
@@ -357,7 +358,7 @@ pub const CLOUD_PARAMS: Vec4 = Vec4::new(0.15, 2.0, 0.6, 3.0);
 /// Cloud zenith fade start and end, occlusion start and end.
 pub const CLOUD_FADES: Vec4 = Vec4::new(0.97, 1.0, 0.35, 0.9);
 
-/// The V2 stars.
+/// The star field and the shooting stars, as the preset sets them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StarsV2 {
     pub brightness: f32,
@@ -388,7 +389,7 @@ pub const STARS_V2: StarsV2 = StarsV2 {
 };
 
 /// Linear between the four phase anchors (night, sunrise, day, sunset), wrapping from the last
-/// back to the first. Unity's `SkyboxLookPreset.EvaluateByPhase`.
+/// back to the first, so a value keyed at the four anchors runs through the whole day.
 pub fn evaluate_by_phase(by_phase: Vec4, phase: f32) -> f32 {
     let scaled = phase.clamp(0.0, 1.0) * 4.0;
     let anchor = (scaled as usize).min(3);
@@ -486,9 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn sky_lut_matches_unity() {
-        // Texels of Presets/StylizedV1_SkyLut.asset (RGBAHalf): (row, column, rgb).
-        let unity: [(usize, usize, [f32; 3]); 8] = [
+    fn sky_lut_matches_the_baked_preset() {
+        // Texels of the preset's baked lookup, in half floats: (row, column, rgb).
+        let expected: [(usize, usize, [f32; 3]); 8] = [
             (0, 0, [0.030883789, 0.015792847, 0.17687988]),
             (0, 128, [0.22314453, 0.11029053, 0.38793945]),
             (1, 0, [2.1992188, 1.7001953, 1.0]),
@@ -499,7 +500,7 @@ mod tests {
             (3, 128, [0.5341797, 0.32885742, 0.7202148]),
         ];
         let lut = bake_sky_lut();
-        for (row, x, rgb) in unity {
+        for (row, x, rgb) in expected {
             let texel = lut[row * SKY_LUT_WIDTH + x];
             for c in 0..3 {
                 assert!(

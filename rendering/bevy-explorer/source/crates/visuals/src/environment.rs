@@ -619,7 +619,7 @@ mod tests {
         use crate::sky_preset::{
             sample_ramp, time_to_phase, MOON_COLOR_RAMP, MOON_MASK_SIZE, SUN_COLOR_RAMP,
         };
-        use crate::stylized_sky::unity_gamma_to_linear;
+        use crate::stylized_sky::gamma_to_linear;
         use scene_runner::update_world::lights::moon_progress;
         let mut app = light_app();
         // midnight: the light is on the moon's arc and the sky's sun under the horizon
@@ -638,7 +638,7 @@ mod tests {
         );
         assert_eq!(
             atmosphere.disc_color,
-            unity_gamma_to_linear(sample_ramp(&MOON_COLOR_RAMP, moon_progress(0.0)))
+            gamma_to_linear(sample_ramp(&MOON_COLOR_RAMP, moon_progress(0.0)))
         );
 
         // a scene's direction is the light's and the sky sun's: the sun's whole disc is there
@@ -651,7 +651,7 @@ mod tests {
         assert_eq!(atmosphere.mask_size, 0.0);
         assert_eq!(
             atmosphere.disc_color,
-            unity_gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0)))
+            gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0)))
         );
 
         // and its sun colour tints the disc, at the preset's brightness times the authored one above 1
@@ -666,7 +666,7 @@ mod tests {
             .id();
         app.world_mut().resource_mut::<SceneGlobalLight>().source = Some(scene);
         app.update();
-        let preset = unity_gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0)));
+        let preset = gamma_to_linear(sample_ramp(&SUN_COLOR_RAMP, time_to_phase(0.0)));
         assert!(sky(&app)
             .disc_color
             .abs_diff_eq(Vec3::X * preset.max_element() * 4.0, 1e-5));
@@ -917,7 +917,7 @@ mod tests {
         // azimuth is undefined; only an authored nadir replaces it. A horizontal screenshot
         // cannot detect a NaN at face -Y.
         // the sky decodes the lookup from sRGB as its last step
-        let lut_horizon = crate::stylized_sky::shader_graph_rgb_to_linear(Vec3::from_slice(
+        let lut_horizon = crate::stylized_sky::sky_rgb_to_linear(Vec3::from_slice(
             &crate::sky_preset::bake_sky_lut()[2 * crate::sky_preset::SKY_LUT_WIDTH][..3],
         ));
         for band in ["nadir", "zenith", "horizon", "rim", "none"] {

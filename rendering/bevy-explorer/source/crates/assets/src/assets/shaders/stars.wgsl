@@ -1,15 +1,15 @@
-// Unity's Stars v2 and shooting stars (`SkyLut.hlsl`), added at screen resolution: after depth of
-// field where the view has it, else before the transparent pass (see stars.rs). Each pixel of
-// clear sky looks up the star cells around its view direction on a cube grid, so a star keeps
-// one angular size everywhere. Unity draws the stars inside its sky shader, under the clouds;
-// here the sky cube's alpha, its cloud cover, fades them. Unity adds them before its sky's last
-// step decodes sRGB to linear, so each adds what that decode makes of it over the sky behind
+// The star field and the shooting stars, added at screen resolution: after depth of field where
+// the view has it, else before the transparent pass (see stars.rs). Each pixel of clear sky
+// looks up the star cells around its view direction on a cube grid, so a star keeps one angular
+// size everywhere. The stars belong under the clouds: the sky cube's alpha, its cloud cover,
+// fades them. The sky is composited on authored sRGB values and decoded to linear last, and the
+// stars belong before that decode, so each adds what the decode makes of it over the sky behind
 // it. The output is blended additively, so pixels with no star are discarded.
 
 #import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput
 #import bevy_render::view::View
 
-// Unity's `_DclStarsParams`, `_DclStarsParams2` and `_DclStarsParams3`, and its time
+// The star field's and the shooting stars' parameters at the current day phase, and the time
 struct Stars {
     // brightness at the current day phase
     brightness: f32,
@@ -60,8 +60,8 @@ const SHOOTING_GRID: vec2<f32> = vec2<f32>(12.0, 6.0);
 const SHOOTING_PERIOD: f32 = 25.0;
 const STREAK_LIFE: f32 = 1.2 / SHOOTING_PERIOD;
 
-// Shader Graph's Colorspace Conversion node, RGB to Linear, which ends Unity's sky: the sRGB
-// curve, continued past 1 on its power branch. As in stylized_sky.wgsl
+// The sky's last step, sRGB to linear: the sRGB curve, continued past 1 on its power branch. As
+// in stylized_sky.wgsl
 fn rgb_to_linear(colour: vec3<f32>) -> vec3<f32> {
     let low = colour / 12.92;
     let high = pow(max(abs((colour + 0.055) / 1.055), vec3<f32>(1.192092896e-07)), vec3<f32>(2.4));
@@ -192,7 +192,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
     let world = view.world_from_clip * vec4<f32>(ndc, 1.0, 1.0);
     let direction = normalize(world.xyz / world.w - view.world_position);
-    // Unity's +Z is -Z here: this is its direction for the pixel, so the field is Unity's
+    // the field is authored with +Z where this world has -Z: flipping it keeps each star where
+    // the preset puts it
     let sky_dir = vec3<f32>(direction.x, direction.y, -direction.z);
 
     // azimuth in turns and elevation in 0..1. Straight up and down have no azimuth, and
@@ -233,7 +234,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let turned = vec3<f32>(sky_dir.x * c - sky_dir.z * s, sky_dir.y, sky_dir.x * s + sky_dir.z * c);
     var star = star_field(turned, stars.time);
 
-    // Unity's V runs up the image
+    // the noise's V runs up the image
     let patch_noise = textureSampleGrad(
         noise_texture,
         noise_sampler,

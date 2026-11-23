@@ -1,4 +1,4 @@
-//! Unity's Stars v2 and shooting stars, drawn at screen resolution instead of being baked into
+//! The star field and the shooting stars, drawn at screen resolution instead of being baked into
 //! the sky cubemap and blurred with it. See `stars.wgsl`.
 //!
 //! A view with depth of field draws them after depth of field, so they stay pin sharp, and dims
@@ -122,8 +122,8 @@ mod settings {
 
     use super::*;
 
-    /// The star field: what Unity's `_DclStarsParams`, `_DclStarsParams2` and `_DclStarsParams3`
-    /// carry, and its time.
+    /// The star field's and the shooting stars' parameters at the current day phase, and the
+    /// time that drives them.
     #[derive(Resource, Clone, Copy, ExtractResource, ShaderType)]
     pub struct StarsSettings {
         /// brightness at the current day phase

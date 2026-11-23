@@ -1,11 +1,11 @@
-// The stylized sky: the sky colour from a lookup by day phase and elevation, with a scene's own sky colours blended over it, then the sun or the moon as a
-// disc in a halo, under three strips of cloud. The lookup follows Unity's SkyLut.hlsl, the disc
-// its SunDisc.hlsl, the halo its SunRadiance sub-graph and the clouds its CloudsV2.hlsl. Like
-// Unity's GenesisSky graph, everything is composited on the authored values and the result is
-// decoded from sRGB to linear as the last step.
+// The stylized sky: the sky colour from a lookup by day phase and elevation, with a scene's own
+// sky colours blended over it, then the sun or the moon as a disc in a halo, under three strips
+// of cloud. Everything is composited on the authored (sRGB) values, which is what the preset's
+// colours and blends were tuned on, and the result is decoded from sRGB to linear as the last
+// step.
 //
 // Two entry points share `sky_at`. The skybox material (`SKY_MATERIAL`) draws the sky on the
-// screen per pixel, as Unity's skybox does, so the clouds keep the strips' detail. The compute
+// screen per pixel, so the clouds keep the strips' detail. The compute
 // entry draws the same sky into the atmosphere cube, which the reflections, the ambient and the
 // star pass read.
 
@@ -98,7 +98,7 @@ fn horizon_noise(azimuth: f32, elevation_deg: f32) -> f32 {
     // a whole repeat count, so the strip meets itself at the azimuth wrap
     let tiling_u = max(round(sky.horizon_noise.y), 1.0);
     let uv = vec2<f32>(azimuth * tiling_u + sky.time * sky.horizon_noise.w, v_dome * sky.horizon_noise.z);
-    // Unity's V runs up the image; a compute shader has no derivatives, so the top level
+    // the image's V runs up it; a compute shader has no derivatives, so the top level
     return textureSampleLevel(noise_texture, noise_sampler, vec2<f32>(uv.x, 1.0 - uv.y), 0.0).r * weight;
 }
 
@@ -145,7 +145,7 @@ fn clouds(dir: vec3<f32>, azimuth: f32, elevation_deg: f32) -> vec4<f32> {
         let look = sky.cloud_looks[index];
         let v_tex = (v_dome + layer.y - 0.5) / max(layer.x, 1e-3) + 0.5;
         let uv = vec2<f32>(azimuth * layer.z + layer.w - look.w, saturate(1.0 - v_tex));
-        // Unity's V runs up the image; a compute shader has no derivatives, so the top level
+        // the image's V runs up it; a compute shader has no derivatives, so the top level
         let strip = textureSampleLevel(cloud_texture, cloud_sampler, vec2<f32>(uv.x, 1.0 - uv.y), index, 0.0);
 
         // the strips fade to black where the mask fades; undone, soft edges keep the cloud's
@@ -163,11 +163,11 @@ fn clouds(dir: vec3<f32>, azimuth: f32, elevation_deg: f32) -> vec4<f32> {
     return vec4<f32>(color, alpha);
 }
 
-// The sun's or the moon's disc toward `dir`: Unity's SunDisc_float without the haze and the
-// second sun, which the preset leaves off.
+// The sun's or the moon's disc toward `dir`, with no haze and no second sun: the preset leaves
+// both off.
 fn disc(dir: vec3<f32>) -> vec3<f32> {
-    // Unity's own vectors, so its maths applies as written: its +Z is -Z here, its light
-    // direction runs from the body and its view direction from the sky to the eye
+    // the vectors the preset's disc maths is written for: its +Z is -Z here, its light direction
+    // runs from the body and its view direction from the sky to the eye
     let light = vec3<f32>(-sky.body_direction.x, -sky.body_direction.y, sky.body_direction.z);
     let view = vec3<f32>(-dir.x, -dir.y, dir.z);
     let body = step(acos(clamp(dot(light, view), -1.0, 1.0)), sky.disc_size * 0.3);
@@ -183,18 +183,18 @@ fn disc(dir: vec3<f32>) -> vec3<f32> {
     return body * sky.disc_color * sky.disc_opacity * sky.disc_opacity * mask;
 }
 
-// Shader Graph's Colorspace Conversion node, RGB to Linear: the sRGB curve, continued past 1 on
-// its power branch.
+// sRGB to linear: the sRGB curve, continued past 1 on its power branch, so the bright disc and
+// halo keep growing instead of clipping.
 fn rgb_to_linear(colour: vec3<f32>) -> vec3<f32> {
     let low = colour / 12.92;
     let high = pow(max(abs((colour + 0.055) / 1.055), vec3<f32>(1.192092896e-07)), vec3<f32>(2.4));
     return select(high, low, colour <= vec3<f32>(0.04045));
 }
 
-// The glow around the body toward `dir`: Unity's SunRadiance sub-graph. Its strength is the
-// intensity times (1 + radius - angle), kept to 0 to 1: it falls off linearly with the angle from
-// the body and is gone at 1 + radius radians. The graph's colour is a vec4, so its length counts
-// an alpha of 1.
+// The glow around the body toward `dir`. Its strength is the intensity times
+// (1 + radius - angle), kept to 0 to 1: it falls off linearly with the angle from the body and is
+// gone at 1 + radius radians. Its colour is the disc's normalised with an alpha of 1: under unit
+// length however bright the disc, and dim when the disc is dim.
 fn halo(dir: vec3<f32>) -> vec3<f32> {
     let angle = acos(clamp(dot(sky.body_direction, dir), -1.0, 1.0));
     return saturate((1.0 - angle + sky.halo.x) * sky.halo.y) * normalize(vec4<f32>(sky.disc_color, 1.0)).rgb;
@@ -203,7 +203,8 @@ fn halo(dir: vec3<f32>) -> vec3<f32> {
 // The sky toward `ray`, a unit vector: its colour, and how much the clouds hide of what lies
 // behind them.
 fn sky_at(ray: vec3<f32>) -> vec4<f32> {
-    // Unity's +Z is -Z here. Straight up and down have no azimuth, and atan2(0, 0) is undefined
+    // the preset's +Z is -Z here. Straight up and down have no azimuth, and atan2(0, 0) is
+    // undefined
     var azimuth = 0.0;
     if ray.x != 0.0 || ray.z != 0.0 {
         azimuth = atan2(ray.x, -ray.z) / TAU;
@@ -231,15 +232,13 @@ fn sky_at(ray: vec3<f32>) -> vec4<f32> {
     let cloud = clouds(ray, azimuth, elevation_deg);
     let occlusion = smoothstep(sky.cloud_fades.z, max(sky.cloud_fades.w, sky.cloud_fades.z + 1e-4), cloud.a);
 
-    // The body goes on the sky under the clouds, in the order of the edges of Unity's
-    // GenesisSky.shadergraph with its stylized keyword on:
-    //   SkyLut -> Blend (Screen; Blend = Sun Radiance, Opacity = Sun Opacity)
-    //          -> SunComposite.Base (Blend = SunAndMoon * saturate(1 - Occlusion),
-    //                                Opacity = saturate(1 - Occlusion))
-    //          -> CloudsV2Composite.Base
+    // The body goes on the sky under the clouds, in this order:
+    //   sky colour -> screen the halo, at the disc's opacity
+    //              -> add the disc times (1 - occlusion), at an opacity of (1 - occlusion)
+    //              -> the clouds
     // So the halo is added once, screened onto the sky at the disc's opacity, and no cloud
-    // occlusion masks it: the clouds only cover it. The disc is added (SunComposite, stylized)
-    // and the occlusion counts twice, in what is blended and in how much of the blend shows.
+    // occlusion masks it: the clouds only cover it. The disc is added and the occlusion counts
+    // twice, in what is blended and in how much of the blend shows.
     if sky.scene_sun_visible > 0.0 {
         let screened = 1.0 - (1.0 - halo(ray)) * (1.0 - color);
         color = mix(color, screened, sky.disc_opacity);
@@ -250,8 +249,8 @@ fn sky_at(ray: vec3<f32>) -> vec4<f32> {
     // the clouds over the sky and the body, so a soft cloud edge dims the sun behind it
     color = color * (1.0 - cloud.a) + cloud.rgb;
 
-    // GenesisSky then decodes the whole sky from sRGB to linear (Colorspace Conversion, RGB to
-    // Linear). The rim it screens on before is off with the lookup
+    // then the whole sky decodes from sRGB to linear. The preset's rim, screened on before
+    // this, is off with the lookup
     color = rgb_to_linear(color);
 
     return vec4<f32>(color, occlusion);
