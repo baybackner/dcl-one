@@ -22,6 +22,7 @@ The browser logic the web apps share, with no UI ([ADR](../../docs/adr/2026-11-1
 | `freshness/` | How old a cached copy is: its stamp, the older of two copies, a coarse duration and the per-section freshness model |
 | `flow-map.ts` | The node, edge and section model of the flow map and its statistics |
 | `creator-hub-host.ts` | The Creator Hub host contract: its paths, scope and the installed host |
+| `multiplayer-test/` | The Creator Hub multiplayer test: its lanes, launch rules and limits (`rules.ts`), the sidecar's run, report and event types with their normalizers (`types.ts`), and the client of the local sidecar (`sidecar.ts`) |
 
 ## Rules
 
